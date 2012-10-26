@@ -82,9 +82,10 @@ public class DefaultTableManager implements TableManager {
 		File  override = new File(assetOverrideDir, fileName);
 
         BufferedReader input = null;
+        InputStream data = null;
         try {
             try {
-                InputStream data = null;
+                
                 if (override.canRead()) {
                     data = new FileInputStream(override);
                 } else {
@@ -108,9 +109,15 @@ public class DefaultTableManager implements TableManager {
             } finally {
                 if (input != null) {
                     try {
-                        if (input != null) {
-                            input.close();
-                        }
+                        input.close();
+                    } catch (IOException e) {
+                        LOG.warn("Error closing table inputstream.", e);
+                    }
+                }
+                
+                if (data != null) {
+                    try {
+                        data.close();
                     } catch (IOException e) {
                         LOG.warn("Error closing table inputstream.", e);
                     }
