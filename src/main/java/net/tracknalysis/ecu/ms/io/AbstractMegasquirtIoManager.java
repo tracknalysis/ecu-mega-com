@@ -38,6 +38,16 @@ public abstract class AbstractMegasquirtIoManager implements MegasquirtIoManager
         super();
         this.delegate = delegate;
     }
+    
+    @Override
+    public synchronized final void connect() throws IOException {
+        delegate.connect();
+    }
+    
+    @Override
+    public synchronized final void disconnect() throws IOException {
+        delegate.disconnect();
+    }
 
     /**
      * {@inheritDoc}
@@ -46,7 +56,7 @@ public abstract class AbstractMegasquirtIoManager implements MegasquirtIoManager
      * copyright David Smith.  Licensed under the Apache License, Version 2.0.
      */
     @Override
-    public synchronized void writeCommand(byte[] command) throws IOException {
+    public synchronized void write(byte[] command) throws IOException {
         OutputStream os = getOutputStream();
         
         if (command[0] == 'r') {
@@ -74,9 +84,9 @@ public abstract class AbstractMegasquirtIoManager implements MegasquirtIoManager
     @Override
     public synchronized byte[] writeAndRead(byte[] command, long delay) throws IOException {
         flushAll();
-        writeCommand(command);
+        write(command);
         delay(delay);
-        byte[] result = readBytes();
+        byte[] result = read();
         return result;
     }
     
@@ -89,8 +99,8 @@ public abstract class AbstractMegasquirtIoManager implements MegasquirtIoManager
     @Override
     public synchronized void writeAndRead(byte[] command, byte[] result, long timeout) throws IOException {
         flushAll();
-        writeCommand(command);
-        readBytes(result, timeout);
+        write(command);
+        read(result, timeout);
     }
     
     /**
@@ -100,7 +110,7 @@ public abstract class AbstractMegasquirtIoManager implements MegasquirtIoManager
      * copyright David Smith.  Licensed under the Apache License, Version 2.0.
      */
     @Override
-    public synchronized byte[] readBytes() throws IOException {
+    public synchronized byte[] read() throws IOException {
         InputStream is = getInputStream();
         List<Byte> read = new ArrayList<Byte>();
         

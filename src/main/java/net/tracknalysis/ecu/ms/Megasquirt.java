@@ -94,6 +94,7 @@ public abstract class Megasquirt
             stopLogging();
             refreshFlags();
             trueSignature = null;
+            connected = false;
         }
     }
     
@@ -393,14 +394,14 @@ public abstract class Megasquirt
         
         if (pageSelectCommand != null) {
             // TODO look for code that actually has a page select command and clean this up to 1 call.
-            msIoManager.writeCommand(pageSelectCommand);
+            msIoManager.write(pageSelectCommand);
         }
         
         if (pageReadCommand != null) {
-            msIoManager.writeCommand(pageReadCommand);
+            msIoManager.write(pageReadCommand);
         }
         
-        msIoManager.readBytes(pageBuffer, 1500);
+        msIoManager.read(pageBuffer, 1500);
     }        
 
     private class LogThread extends GracefulShutdownThread {
@@ -412,20 +413,29 @@ public abstract class Megasquirt
         }
 
         public void run() {
+            int consecutiveErrorCount = 0;
+            
             try {
-                
                 logStartTime = System.currentTimeMillis();
                 while (run) {
-                    getRuntimeVars();
-                    calculateValues();
-                    logValues();
+                    try {
+                        getRuntimeVars();
+                        calculateValues();
+                        logValues();
+                        consecutiveErrorCount = 0;
+                    } catch (Exception e) {
+                        if (consecutiveErrorCount > 5) {
+                            throw e;
+                        } else {
+                            consecutiveErrorCount += 1;
+                            LOG.warn("Encountered " + consecutiveErrorCount
+                                    + " consecutive error(s) in logging thread.", e);
+                        }
+                    }
                 }
-            } catch (IOException e) {
-                LOG.error("", e);
-            } catch (ArithmeticException e) {
-                LOG.error("", e);
-            } catch (RuntimeException e) {
-                LOG.error("", e);
+            } catch (Exception e) {
+                LOG.error("Fatal error in log thread.", e);
+                // TODO deal with shutdown without throwing an exception and crashing the app.  Also, notifications!
             }
         }
     }

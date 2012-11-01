@@ -155,7 +155,7 @@ public abstract class MegasquirtFactory {
                 fingerprint = queryForFingerprint(msIoManager, queryCommands);
             } catch (BootException e) {
                 LOG.info("ECU needs to boot.  Sending boot command.");
-                msIoManager.writeCommand(BOOT_COMMAND);
+                msIoManager.write(BOOT_COMMAND);
                 delay(500);
                 error = e;
             } catch (SignatureException e) {

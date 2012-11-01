@@ -46,7 +46,7 @@ public class DirectMegasquirtIoManager extends AbstractMegasquirtIoManager {
      * copyright David Smith.  Licensed under the Apache License, Version 2.0.
      */
     @Override
-    public synchronized void readBytes(byte[] result, long timeout) throws IOException {
+    public synchronized void read(byte[] result, long timeout) throws IOException {
         InputStream is = getInputStream();
         
         long start = System.currentTimeMillis();

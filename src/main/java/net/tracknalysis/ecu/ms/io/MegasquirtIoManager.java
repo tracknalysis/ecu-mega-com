@@ -26,13 +26,29 @@ import java.io.IOException;
 public interface MegasquirtIoManager {
 
     /**
+     * Closes any underlying resources, such as a socket, in order to be stop
+     * for communication and release resources.
+     * 
+     * @throws IOException
+     *             if there is an error
+     */
+    void connect() throws IOException;
+
+    /**
+     * Opens any underlying resources, such as a socket, in order to be ready for communication.
+     *
+     * @throws IOException if there is an error
+     */
+    void disconnect() throws IOException;
+    
+    /**
      * Writes a command to the output stream, flushing the stream afterwards.
      * Does not flush the stream before writing.
      * 
      * @param command
      *            the command bytes to write
      */
-    void writeCommand(byte[] command) throws IOException;
+    void write(byte[] command) throws IOException;
 
     /**
      * Flushes all streams, writes a command to the output stream, flushing the
@@ -70,7 +86,7 @@ public interface MegasquirtIoManager {
      * 
      * @return the bytes read, never {@code null}
      */
-    byte[] readBytes() throws IOException;
+    byte[] read() throws IOException;
 
     /**
      * Reads {@code result.length} bytes on the input stream into {@code result}
@@ -83,7 +99,7 @@ public interface MegasquirtIoManager {
      *            the time in, milliseconds, to wait for the full response to
      *            arrive before throwing an exception
      */
-    void readBytes(byte[] result, long timeout) throws IOException;
+    void read(byte[] result, long timeout) throws IOException;
 
     /**
      * Flushes the output stream and then discards all available input on

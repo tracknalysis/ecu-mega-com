@@ -45,7 +45,7 @@ public class DefaultMegasquirtFactory extends MegasquirtFactory {
     @Override
     public Megasquirt getMegasquirt(String signature,
             MegasquirtIoManager msIoManager, TableManager tableManager,
-            Log logManager, MegasquirtConfiguration configuration) {
+            Log logManager, MegasquirtConfiguration configuration) throws MegasquirtFactoryException {
         
         Class<? extends Megasquirt> clazz = signatureMap.get(signature);
         return getMegasquirt(clazz, msIoManager, tableManager, 
@@ -54,7 +54,7 @@ public class DefaultMegasquirtFactory extends MegasquirtFactory {
     
     protected Megasquirt getMegasquirt(Class<? extends Megasquirt> clazz,
             MegasquirtIoManager msIoManager, TableManager tableManager,
-            Log logManager, MegasquirtConfiguration configuration) {
+            Log logManager, MegasquirtConfiguration configuration) throws MegasquirtFactoryException {
         
         Megasquirt megasquirt = null;
         
@@ -62,13 +62,11 @@ public class DefaultMegasquirtFactory extends MegasquirtFactory {
             Constructor<? extends Megasquirt> constructor = null;
             try {
                 constructor = clazz.getConstructor(MegasquirtIoManager.class,
-                        DefaultTableManager.class, Log.class, MegasquirtConfiguration.class);
+                        TableManager.class, Log.class, MegasquirtConfiguration.class);
             } catch (SecurityException e) {
-                // TODO Auto-generated catch block
-                e.printStackTrace();
+                throw new MegasquirtFactoryException(e);
             } catch (NoSuchMethodException e) {
-                // TODO Auto-generated catch block
-                e.printStackTrace();
+                throw new MegasquirtFactoryException(e);
             }
             
             if (constructor != null) {
@@ -76,17 +74,13 @@ public class DefaultMegasquirtFactory extends MegasquirtFactory {
                     megasquirt = constructor.newInstance(msIoManager,
                             tableManager, logManager, configuration);
                 } catch (IllegalArgumentException e) {
-                    // TODO Auto-generated catch block
-                    e.printStackTrace();
+                    throw new MegasquirtFactoryException(e);
                 } catch (InstantiationException e) {
-                    // TODO Auto-generated catch block
-                    e.printStackTrace();
+                    throw new MegasquirtFactoryException(e);
                 } catch (IllegalAccessException e) {
-                    // TODO Auto-generated catch block
-                    e.printStackTrace();
+                    throw new MegasquirtFactoryException(e);
                 } catch (InvocationTargetException e) {
-                    // TODO Auto-generated catch block
-                    e.printStackTrace();
+                    throw new MegasquirtFactoryException(e);
                 }
             }
         }

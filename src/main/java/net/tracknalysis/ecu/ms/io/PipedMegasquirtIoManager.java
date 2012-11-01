@@ -64,7 +64,7 @@ public final class PipedMegasquirtIoManager extends AbstractMegasquirtIoManager 
     }
     
     @Override
-    public synchronized void readBytes(byte[] result, long timeout) throws IOException {
+    public synchronized void read(byte[] result, long timeout) throws IOException {
         
         int bytesRead = 0;
         ReadCallable callable = new ReadCallable(result, timeout, pis);
