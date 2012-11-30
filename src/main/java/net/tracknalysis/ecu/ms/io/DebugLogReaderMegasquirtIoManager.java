@@ -55,12 +55,14 @@ public class DebugLogReaderMegasquirtIoManager implements MegasquirtIoManager {
 
     @Override
     public byte[] writeAndRead(byte[] command, long delay) throws IOException {
+        delay(delay);
         return writeAndReadInternal(command);
     }
 
     @Override
-    public void writeAndRead(byte[] command, byte[] result, long timeout)
-            throws IOException {
+    public void writeAndRead(byte[] command, byte[] result, long timeout) throws IOException {
+        delay(timeout/2);
+        
         byte [] interimResult = writeAndReadInternal(command);
         if (interimResult.length != result.length) {
             throw new IOException("Expected [" + result.length
@@ -78,6 +80,8 @@ public class DebugLogReaderMegasquirtIoManager implements MegasquirtIoManager {
 
     @Override
     public void read(byte[] result, long timeout) throws IOException {
+        delay(timeout/2);
+        
         byte[] interimResult = readInternal();
         
         if (interimResult.length != result.length) {
@@ -92,6 +96,14 @@ public class DebugLogReaderMegasquirtIoManager implements MegasquirtIoManager {
     @Override
     public void flushAll() throws IOException {
         // Do nothing for this in simulation
+    }
+    
+    private void delay(long time) throws IOException {
+        try {
+            Thread.sleep(time);
+        } catch (InterruptedException e) {
+            throw new IOException("Interrupted while delaying.", e);
+        }
     }
     
     private void writeInternal(byte[] command) throws IOException {
