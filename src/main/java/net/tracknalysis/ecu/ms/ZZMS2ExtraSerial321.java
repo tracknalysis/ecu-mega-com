@@ -18,7 +18,7 @@ package net.tracknalysis.ecu.ms;
 import java.io.IOException;
 import java.util.*;
 
-import net.tracknalysis.ecu.ms.io.MegasquirtIoManager;
+import net.tracknalysis.ecu.ms.io.MsIoManager;
 import net.tracknalysis.ecu.ms.log.Log;
 
 
@@ -29,9 +29,9 @@ import net.tracknalysis.ecu.ms.log.Log;
  */
 public class ZZMS2ExtraSerial321 extends Megasquirt {
 
-    public ZZMS2ExtraSerial321(MegasquirtIoManager msIoManager,
+    public ZZMS2ExtraSerial321(MsIoManager msIoManager,
             TableManager tableManager, Log logManager,
-            MegasquirtConfiguration configuration) {
+            MsConfiguration configuration) {
         super(msIoManager, tableManager, logManager, configuration);
         refreshFlags();
     }

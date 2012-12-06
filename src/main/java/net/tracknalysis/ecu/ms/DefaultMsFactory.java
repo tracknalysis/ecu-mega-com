@@ -21,7 +21,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 
-import net.tracknalysis.ecu.ms.io.MegasquirtIoManager;
+import net.tracknalysis.common.io.IoManager;
 import net.tracknalysis.ecu.ms.log.Log;
 
 import org.slf4j.Logger;
@@ -31,21 +31,21 @@ import org.slf4j.LoggerFactory;
 /**
  * @author David Valeri
  */
-public class DefaultMegasquirtFactory extends MegasquirtFactory {
+public class DefaultMsFactory extends MsFactory {
     
-    private static final Logger LOG = LoggerFactory.getLogger(DefaultMegasquirtFactory.class);
+    private static final Logger LOG = LoggerFactory.getLogger(DefaultMsFactory.class);
     
     Map<String, Class<? extends Megasquirt>> signatureMap = 
             new HashMap<String, Class<? extends Megasquirt>>();
     
-    public DefaultMegasquirtFactory() {
+    public DefaultMsFactory() {
         registerSignatures(ZZMS2ExtraSerial321.sigs, ZZMS2ExtraSerial321.class);
     }
 
     @Override
     public Megasquirt getMegasquirt(String signature,
-            MegasquirtIoManager msIoManager, TableManager tableManager,
-            Log logManager, MegasquirtConfiguration configuration) throws MegasquirtFactoryException {
+    		IoManager msIoManager, TableManager tableManager,
+            Log logManager, MsConfiguration configuration) throws MsFactoryException {
         
         Class<? extends Megasquirt> clazz = signatureMap.get(signature);
         return getMegasquirt(clazz, msIoManager, tableManager, 
@@ -53,20 +53,20 @@ public class DefaultMegasquirtFactory extends MegasquirtFactory {
     }
     
     protected Megasquirt getMegasquirt(Class<? extends Megasquirt> clazz,
-            MegasquirtIoManager msIoManager, TableManager tableManager,
-            Log logManager, MegasquirtConfiguration configuration) throws MegasquirtFactoryException {
+    		IoManager msIoManager, TableManager tableManager,
+            Log logManager, MsConfiguration configuration) throws MsFactoryException {
         
         Megasquirt megasquirt = null;
         
         if (clazz != null) {
             Constructor<? extends Megasquirt> constructor = null;
             try {
-                constructor = clazz.getConstructor(MegasquirtIoManager.class,
-                        TableManager.class, Log.class, MegasquirtConfiguration.class);
+                constructor = clazz.getConstructor(IoManager.class,
+                        TableManager.class, Log.class, MsConfiguration.class);
             } catch (SecurityException e) {
-                throw new MegasquirtFactoryException(e);
+                throw new MsFactoryException(e);
             } catch (NoSuchMethodException e) {
-                throw new MegasquirtFactoryException(e);
+                throw new MsFactoryException(e);
             }
             
             if (constructor != null) {
@@ -74,13 +74,13 @@ public class DefaultMegasquirtFactory extends MegasquirtFactory {
                     megasquirt = constructor.newInstance(msIoManager,
                             tableManager, logManager, configuration);
                 } catch (IllegalArgumentException e) {
-                    throw new MegasquirtFactoryException(e);
+                    throw new MsFactoryException(e);
                 } catch (InstantiationException e) {
-                    throw new MegasquirtFactoryException(e);
+                    throw new MsFactoryException(e);
                 } catch (IllegalAccessException e) {
-                    throw new MegasquirtFactoryException(e);
+                    throw new MsFactoryException(e);
                 } catch (InvocationTargetException e) {
-                    throw new MegasquirtFactoryException(e);
+                    throw new MsFactoryException(e);
                 }
             }
         }

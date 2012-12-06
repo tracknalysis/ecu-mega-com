@@ -23,7 +23,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import net.tracknalysis.common.concurrent.GracefulShutdownThread;
-import net.tracknalysis.ecu.ms.io.MegasquirtIoManager;
+import net.tracknalysis.common.io.IoManager;
 import net.tracknalysis.ecu.ms.log.Log;
 
 import org.slf4j.Logger;
@@ -49,12 +49,12 @@ public abstract class Megasquirt
     private volatile long logStartTime;
     
     private Log log;
-    private MegasquirtIoManager msIoManager;
+    private IoManager msIoManager;
     private TableManager tableManager;
-    private MegasquirtConfiguration configuration;
+    private MsConfiguration configuration;
     
-    public Megasquirt(MegasquirtIoManager msIoManager, TableManager tableManager,
-            Log logManager, MegasquirtConfiguration configuration) {
+    public Megasquirt(IoManager msIoManager, TableManager tableManager,
+            Log logManager, MsConfiguration configuration) {
         this.msIoManager = msIoManager;
         this.tableManager = tableManager;
         this.log = logManager;
@@ -365,7 +365,7 @@ public abstract class Megasquirt
      */
     protected String getSignature() throws IOException, SignatureException {
         byte[] sigCommand = getSigCommand();
-        return MegasquirtFactory.getInstance().getSignature(msIoManager, 20,
+        return MsFactory.getInstance().getSignature(msIoManager, 20,
                 Arrays.asList(sigCommand));
     }
     

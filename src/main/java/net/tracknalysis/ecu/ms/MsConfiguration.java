@@ -18,23 +18,7 @@ package net.tracknalysis.ecu.ms;
 /**
  * @author David Valeri
  */
-public class MegasquirtFactoryException extends Exception {
-
-    private static final long serialVersionUID = 1L;
-
-    public MegasquirtFactoryException() {
-        super();
-    }
-
-    public MegasquirtFactoryException(String detailMessage, Throwable throwable) {
-        super(detailMessage, throwable);
-    }
-
-    public MegasquirtFactoryException(String detailMessage) {
-        super(detailMessage);
-    }
-
-    public MegasquirtFactoryException(Throwable throwable) {
-        super(throwable);
-    }
+public interface MsConfiguration {
+    
+    boolean isSet(String flag);
 }

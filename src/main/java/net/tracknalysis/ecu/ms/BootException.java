@@ -18,7 +18,7 @@ package net.tracknalysis.ecu.ms;
 /**
  * @author David Smith
  */
-@SuppressWarnings("serial") class BootException extends Exception
+@SuppressWarnings("serial") 
+class BootException extends Exception
 {
-
 }

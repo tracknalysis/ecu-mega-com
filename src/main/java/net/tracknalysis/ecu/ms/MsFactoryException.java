@@ -15,27 +15,26 @@
  */
 package net.tracknalysis.ecu.ms;
 
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.Set;
-
 /**
  * @author David Valeri
  */
-public class DefaultMegasquirtConfiguration implements MegasquirtConfiguration {
-    
-    private Set<String> props;
-    
-    public DefaultMegasquirtConfiguration(Set<String> flags) {
-        if (flags == null) {
-            this.props = Collections.emptySet();
-        } else {
-            this.props = new HashSet<String>(flags);
-        }
+public class MsFactoryException extends Exception {
+
+    private static final long serialVersionUID = 1L;
+
+    public MsFactoryException() {
+        super();
     }
 
-    @Override
-    public boolean isSet(String property) {
-        return props.contains(property);
+    public MsFactoryException(String detailMessage, Throwable throwable) {
+        super(detailMessage, throwable);
+    }
+
+    public MsFactoryException(String detailMessage) {
+        super(detailMessage);
+    }
+
+    public MsFactoryException(Throwable throwable) {
+        super(throwable);
     }
 }

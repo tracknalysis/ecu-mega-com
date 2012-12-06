@@ -20,7 +20,8 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
-import net.tracknalysis.ecu.ms.io.MegasquirtIoManager;
+import net.tracknalysis.common.io.IoManager;
+import net.tracknalysis.common.io.IoManagerResult;
 import net.tracknalysis.ecu.ms.log.Log;
 
 import org.slf4j.Logger;
@@ -31,20 +32,20 @@ import org.slf4j.LoggerFactory;
  * @author David Smith
  * @author David Valeri
  */
-public abstract class MegasquirtFactory {
+public abstract class MsFactory {
     
-    private static final Logger LOG = LoggerFactory.getLogger(MegasquirtFactory.class);
+    private static final Logger LOG = LoggerFactory.getLogger(MsFactory.class);
     
-    private static MegasquirtFactory INSTANCE;
+    private static MsFactory INSTANCE;
     
     private static final byte[] BOOT_COMMAND = new byte[] {'X'};
     
     public static final List<byte[]> DEFAULT_QUERY_COMMANDS = Collections
             .unmodifiableList(Arrays.asList(new byte[] {'Q'}, new byte[] {'S'}));
     
-    public static synchronized MegasquirtFactory getInstance() {
+    public static synchronized MsFactory getInstance() {
         if (INSTANCE == null) {
-            INSTANCE = new DefaultMegasquirtFactory();
+            INSTANCE = new DefaultMsFactory();
         }
         return INSTANCE;
     }
@@ -59,12 +60,12 @@ public abstract class MegasquirtFactory {
      * @param logManager the log manager to use
      * @param configuration the configuration to use
      *
-     * @throws MegasquirtFactoryException if there is an error constructing the instance
+     * @throws MsFactoryException if there is an error constructing the instance
      */
     public abstract Megasquirt getMegasquirt(String signature,
-            MegasquirtIoManager msIoManager, TableManager tableManager,
-            Log logManager, MegasquirtConfiguration configuration)
-            throws MegasquirtFactoryException;
+    		IoManager msIoManager, TableManager tableManager,
+            Log logManager, MsConfiguration configuration)
+            throws MsFactoryException;
     
     /**
      * Constructs a new {@link Megasquirt} instance of the type appropriate
@@ -75,14 +76,14 @@ public abstract class MegasquirtFactory {
      * @param logManager the log manager to use
      * @param configuration the configuration to use
      *
-     * @throws MegasquirtFactoryException if there is an error constructing the instance
+     * @throws MsFactoryException if there is an error constructing the instance
      * @throws SignatureException if there is an error determining the signature
      * @throws IOException if there is a communication error determining the ECU signature
      */
     public Megasquirt getMegasquirt(
-            MegasquirtIoManager msIoManager, TableManager tableManager,
-            Log logManager, MegasquirtConfiguration configuration)
-            throws MegasquirtFactoryException, SignatureException, IOException {
+    		IoManager msIoManager, TableManager tableManager,
+            Log logManager, MsConfiguration configuration)
+            throws MsFactoryException, SignatureException, IOException {
         
         String signature = getSignature(msIoManager);
         return getMegasquirt(signature, msIoManager, tableManager, logManager,
@@ -101,7 +102,7 @@ public abstract class MegasquirtFactory {
      * @throws SignatureException if there is an error determining the signature
      * @throws IOException if there is a communication error determining the ECU signature
      */
-    public String getSignature(MegasquirtIoManager msIoManager)
+    public String getSignature(IoManager msIoManager)
             throws SignatureException, IOException {
         return getSignature(msIoManager, 20);
     }
@@ -120,7 +121,7 @@ public abstract class MegasquirtFactory {
      * @throws SignatureException if there is an error determining the signature
      * @throws IOException if there is a communication error determining the ECU signature
      */
-    public String getSignature(MegasquirtIoManager msIoManager,
+    public String getSignature(IoManager msIoManager,
             int retryCount) throws SignatureException, IOException {
         return getSignature(msIoManager, retryCount, DEFAULT_QUERY_COMMANDS);
         
@@ -143,7 +144,7 @@ public abstract class MegasquirtFactory {
      * @throws SignatureException if there is an error determining the signature
      * @throws IOException if there is a communication error determining the ECU signature
      */
-    public String getSignature(MegasquirtIoManager msIoManager, int retryCount,
+    public String getSignature(IoManager msIoManager, int retryCount,
             List<byte[]> queryCommands) throws SignatureException, IOException {
         int tryCounter = 0;
         Exception error = null;
@@ -187,7 +188,7 @@ public abstract class MegasquirtFactory {
      * @throws BootException if the ECU needs to boot
      * @throws InvalidSignatureException if the signature is not a known format or is not returned
      */
-    protected String queryForFingerprint(MegasquirtIoManager msIoManager, 
+    protected String queryForFingerprint(IoManager msIoManager, 
             List<byte[]> queryCommands) 
             throws IOException, BootException, SignatureException {
         
@@ -197,7 +198,8 @@ public abstract class MegasquirtFactory {
         }
         
         for (byte[] command : commandsToUse) {
-            byte[] response = msIoManager.writeAndRead(command, 500);
+            IoManagerResult result = msIoManager.writeAndRead(command, 500);
+            byte[] response = result.getOut();
             if (response.length > 1) {
                 return processSignature(response);
             }

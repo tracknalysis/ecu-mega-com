@@ -18,7 +18,7 @@ package net.tracknalysis.ecu.ms;
 /**
  * @author David Valeri
  */
-public class UnsupportedFirmwareException extends MegasquirtFactoryException {
+public class UnsupportedFirmwareException extends MsFactoryException {
 
     private static final long serialVersionUID = 1L;
 
