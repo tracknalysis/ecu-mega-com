@@ -26,10 +26,11 @@ Authors: David Valeri
   </parent>
 
   <groupId>net.tracknalysis.ecu</groupId> 
-  <artifactId>tracknalysis-mega-com</artifactId>
+  <artifactId>tracknalysis-mega-com-parent</artifactId>
   <version>0.1.0-SNAPSHOT</version>
+  <packaging>pom</packaging>
   
-  <name>Tracknalysis :: Megasquirt :: MegaCom</name>
+  <name>Tracknalysis :: Megasquirt :: MegaCom :: Parent</name>
   <description>A communication tier for interacting with Megasquirt ECUs</description>
   <url>http://tracknalysis.net</url>
   <inceptionYear>2012</inceptionYear>
@@ -79,33 +80,27 @@ Authors: David Valeri
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
   </properties>
   
-  <dependencies>
-    <dependency>
-      <groupId>commons-codec</groupId>
-      <artifactId>commons-codec</artifactId>
-      <!-- Pull down to older version for compatibility with Android. -->
-      <version>1.3</version>
-    </dependency>
-    <dependency>
-      <groupId>junit</groupId>
-      <artifactId>junit</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>log4j</groupId>
-      <artifactId>log4j</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>net.tracknalysis</groupId>
-      <artifactId>tracknalysis-common</artifactId>
-      <version>0.1.0-SNAPSHOT</version>
-    </dependency>
-    <dependency>
-      <groupId>org.slf4j</groupId>
-      <artifactId>slf4j-log4j12</artifactId>
-      <scope>test</scope>
-    </dependency>
-  </dependencies>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>commons-codec</groupId>
+        <artifactId>commons-codec</artifactId>
+        <!-- Pull down to older version for compatibility with Android. -->
+        <version>1.3</version>
+      </dependency>
+      <dependency>
+        <groupId>net.tracknalysis</groupId>
+        <artifactId>tracknalysis-common</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+  
+  <modules>
+    <module>mega-com</module>
+    <module>mega-com-common</module>
+    <module>mega-com-gen</module>
+  </modules>
   
   <build>
     <plugins>
