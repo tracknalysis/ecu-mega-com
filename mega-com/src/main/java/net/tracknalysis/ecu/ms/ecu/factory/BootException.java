@@ -13,10 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package uk.org.smithfamily.mslogger.ecuDef;
+package net.tracknalysis.ecu.ms.ecu.factory;
 
-@SuppressWarnings("serial")
-class BootException extends Exception
+/**
+ * @author David Smith
+ */
+@SuppressWarnings("serial") 
+public class BootException extends Exception
 {
-
 }

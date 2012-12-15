@@ -15,70 +15,68 @@
  */
 package uk.org.smithfamily.mslogger.ecuDef;
 
-import java.io.*;
+import java.io.BufferedOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.text.DecimalFormat;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 
-import uk.org.smithfamily.mslogger.*;
-import uk.org.smithfamily.mslogger.activity.MSLoggerActivity;
-import uk.org.smithfamily.mslogger.comms.CRC32Exception;
-import uk.org.smithfamily.mslogger.comms.ECUConnectionManager;
+import net.tracknalysis.common.concurrent.GracefulShutdownThread;
+import net.tracknalysis.common.io.IoManager;
+import net.tracknalysis.common.io.IoManagerResult;
+import net.tracknalysis.common.io.IoProtocolHandler;
+import net.tracknalysis.common.notification.DefaultNotificationListenerManager;
+import net.tracknalysis.common.notification.NotificationListener;
+import net.tracknalysis.common.notification.NotificationListenerManager;
+import net.tracknalysis.common.notification.NotificationListenerRegistry;
+import net.tracknalysis.common.notification.NotificationType;
+import net.tracknalysis.ecu.ms.MsConfiguration;
+import net.tracknalysis.ecu.ms.SignatureException;
+import net.tracknalysis.ecu.ms.TableManager;
+import net.tracknalysis.ecu.ms.ecu.factory.BootException;
+import net.tracknalysis.ecu.ms.ecu.factory.MsEcuInterfaceFactory;
+import net.tracknalysis.ecu.ms.io.MsCrc32Exception;
+import net.tracknalysis.ecu.ms.io.MsCrc32ProtocolHandler;
+import net.tracknalysis.ecu.ms.log.Log;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import uk.org.smithfamily.mslogger.ecuDef.gen.ECURegistry;
-import uk.org.smithfamily.mslogger.log.*;
-import android.app.*;
-import android.content.*;
-import android.os.*;
-import android.util.Log;
-import android.widget.Toast;
 
 /**
- * Abstract base class for all ECU implementations
+ * Main class for interacting with a Megasquirt.  Adapted from original MSLogger code
+ * to be independent of Android specific libraries.
  * 
- * @author dgs
- * 
+ * @author David Smith
+ * @author David Valeri
  */
-public class Megasquirt extends Service implements MSControllerInterface
-{
-    private static final int MAX_QUEUE_SIZE = 10;
-    BlockingQueue<InjectedCommand> injectionQueue = new ArrayBlockingQueue<InjectedCommand>(MAX_QUEUE_SIZE);
-
-    private enum State
-    {
-        DISCONNECTED, CONNECTING, CONNECTED, LOGGING
-    };
-
-    private volatile State currentState = State.DISCONNECTED;
-
-    private NotificationManager notifications;
-    private MSECUInterface ecuImplementation;
-
-    private final boolean simulated = false;
-    public static final String CONNECTED = "uk.org.smithfamily.mslogger.ecuDef.Megasquirt.CONNECTED";
-    public static final String DISCONNECTED = "uk.org.smithfamily.mslogger.ecuDef.Megasquirt.DISCONNECTED";
-    public static final String NEW_DATA = "uk.org.smithfamily.mslogger.ecuDef.Megasquirt.NEW_DATA";
-    public static final String UNKNOWN_ECU = "uk.org.smithfamily.mslogger.ecuDef.Megasquirt.UNKNOWN_ECU";
-    public static final String UNKNOWN_ECU_BT = "uk.org.smithfamily.mslogger.ecuDef.Megasquirt.UNKNOWN_ECU_BT";
-    public static final String PROBE_ECU = "uk.org.smithfamily.mslogger.ecuDef.Megasquirt.ECU_PROBED";
-    public static final String INJECTED_COMMAND_RESULTS = "uk.org.smithfamily.mslogger.ecuDef.Megasquirt.INJECTED_COMMAND_RESULTS";
-    public static final String INJECTED_COMMAND_RESULT_ID = "uk.org.smithfamily.mslogger.ecuDef.Megasquirt.INJECTED_COMMAND_RESULTS_ID";
-    public static final String INJECTED_COMMAND_RESULT_DATA = "uk.org.smithfamily.mslogger.ecuDef.Megasquirt.INJECTED_COMMAND_RESULTS_DATA";
-
-    private static final String UNKNOWN = "UNKNOWN";
-    private static final String LAST_SIG = "LAST_SIG";
-    private static final String LAST_PROBE = "LAST_PROBE";
-    private static final int NOTIFICATION_ID = 0;
-
-    final DecimalFormat decimalFormat3dp = new DecimalFormat("#.000");
-    final DecimalFormat decimalFormat1dp = new DecimalFormat("#.0");
-
-    private BroadcastReceiver yourReceiver;
-
-    // Used by broadcast receiver
-    public static final int CONTROLLER_COMMAND = 1;
+public class Megasquirt implements MSControllerInterface,
+		NotificationListenerRegistry<MegasquirtNotificationType> {
+	
+	/**
+	 * Lifecycle states that a {@link Megasquirt} can have.
+	 */
+	public static enum MegasquirtState {
+        CONNECTING, CONNECTED, DISCONNECTING, DISCONNECTED
+    };    
+    
+    private static final Logger LOG = LoggerFactory.getLogger(Megasquirt.class);
+    private static final AtomicInteger LOG_THREAD_INSTANCE_COUNTER = new AtomicInteger();
+    private static final MsCrc32ProtocolHandler MS_CRC32_PROTOCOL_HANDLER = new MsCrc32ProtocolHandler();
+	private static final int MAX_QUEUE_SIZE = 10;
+    
 
     public static final int BURN_DATA = 10;
 
@@ -95,474 +93,1039 @@ public class Megasquirt extends Service implements MSControllerInterface
     public static final int MS3_SD_CARD_READ_RTC_WRITE = 60;
     public static final int MS3_SD_CARD_READ_RTC_READ = 61;
 
-    private boolean constantsLoaded;
-    private String trueSignature = "Unknown";
+    
+    private final BlockingQueue<InjectedCommand> injectionQueue = new ArrayBlockingQueue<InjectedCommand>(
+			MAX_QUEUE_SIZE);
+    
+    private final NotificationListenerManager<MegasquirtNotificationType> notificationListenerManager =
+    		new DefaultNotificationListenerManager<MegasquirtNotificationType>(
+    				MegasquirtNotificationType.DISCONNECTED, null);
+    
+    /**
+     * The current lifecycle state.
+     */
+    private volatile MegasquirtState currentState = MegasquirtState.DISCONNECTED;
+    
+    /**
+     * Flag indicating if we are logging.
+     */
+    private volatile boolean logging;
+    
+    /**
+     * The implementation class used to deal with specifics of the Megasquirt firmware that
+     * we are communicating with.
+     */
+    private volatile MSECUInterface ecuImplementation;
+    
+    /**
+	 * Flag indicating if the constants have been loaded from the Megasquirt.
+	 */
+    private volatile boolean constantsLoaded;
+    
+    /**
+     * The true signature of the Megasquirt firmware we are communicating with.
+     */
+    private volatile String trueSignature = "Unknown";
+    
+    /**
+     * The thread that handles communication with the Megasquirt.
+     */
     private volatile ECUThread ecuThread;
-    private static volatile ECUThread watch;
-    private long logStart = 0;
+    
+    /**
+     * Milliseconds from epoch when the current logging session started.
+     */
+    private volatile long logStartTime;
+    
+    private final Log log;
+    private final IoManager ioManager;
+    private final TableManager tableManager;
+    private final MsConfiguration configuration;
+    private final File debugLogDirectory;
 
-    public class LocalBinder extends Binder
-    {
-        public Megasquirt getService()
-        {
-            return Megasquirt.this;
-        }
+    public Megasquirt(IoManager ioManager, TableManager tableManager,
+            Log logManager, MsConfiguration configuration, File debugLogDirectory) {
+        this.ioManager = ioManager;
+        this.tableManager = tableManager;
+        this.log = logManager;
+        this.configuration = configuration;
+        this.debugLogDirectory = debugLogDirectory;
     }
-
-    @Override
-    public int onStartCommand(final Intent intent, final int flags, final int startId)
-    {
-        DebugLogManager.INSTANCE.log("Megasquirt Received start id " + startId + ": " + intent, Log.VERBOSE);
-        // We want this service to continue running until it is explicitly
-        // stopped, so return sticky.
-        return START_STICKY;
-    }
-
-    @Override
-    public IBinder onBind(final Intent intent)
-    {
-        return mBinder;
-    }
-
-    // This is the object that receives interactions from clients. See
-    // RemoteService for a more complete example.
-    private final IBinder mBinder = new LocalBinder();
-
-    @Override
-    public void onCreate()
-    {
-        super.onCreate();
-        notifications = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-
-        final IntentFilter btChangedFilter = new IntentFilter();
-        btChangedFilter.addAction(ApplicationSettings.BT_CHANGED);
-
-        final IntentFilter injectCommandResultsFilter = new IntentFilter();
-        injectCommandResultsFilter.addAction(Megasquirt.INJECTED_COMMAND_RESULTS);
-
-        this.yourReceiver = new BroadcastReceiver()
-        {
-            @Override
-            public void onReceive(final Context context, final Intent intent)
-            {
-                final String action = intent.getAction();
-
-                if (action.equals(ApplicationSettings.BT_CHANGED))
-                {
-                    DebugLogManager.INSTANCE.log("BT_CHANGED received", Log.VERBOSE);
-                    stop();
-                    start();
-                }
-                else if (action.equals(Megasquirt.INJECTED_COMMAND_RESULTS))
-                {
-                    final int resultId = intent.getIntExtra(Megasquirt.INJECTED_COMMAND_RESULT_ID, 0);
-
-                    switch (resultId)
-                    {
-                    case Megasquirt.BURN_DATA:
-                        // Wait til we get some data and flush it
-                        try
-                        {
-                            Thread.sleep(200);
-                        }
-                        catch (final InterruptedException e)
-                        {
-                        }
-
-                        break;
-                    default:
-                        break;
-                    }
-                }
-            }
-        };
-
-        // Registers the receiver so that your service will listen for broadcasts
-        this.registerReceiver(this.yourReceiver, btChangedFilter);
-        this.registerReceiver(this.yourReceiver, injectCommandResultsFilter);
-
-        final String lastSig = ApplicationSettings.INSTANCE.getPref(LAST_SIG);
-        if (lastSig != null)
-        {
-            setImplementation(lastSig);
-        }
-
-        ApplicationSettings.INSTANCE.setEcu(this);
-        start();
-
-        startForeground(NOTIFICATION_ID, null);
-    }
-
-    private void setState(final State s)
-    {
-        currentState = s;
-        int msgId = R.string.disconnected_from_ms;
-        boolean removeNotification = false;
-        switch (currentState)
-        {
-        case DISCONNECTED:
-            removeNotification = true;
-            break;
-        case CONNECTING:
-            msgId = R.string.connecting_to_ms;
-            break;
-        case CONNECTED:
-            msgId = R.string.connected_to_ms;
-            break;
-        case LOGGING:
-            msgId = R.string.logging;
-            break;
-        default:
-            msgId = R.string.unknown;
-            break;
-        }
-
-        if (removeNotification)
-        {
-            notifications.cancelAll();
-        }
-        else
-        {
-            final CharSequence text = getText(R.string.app_name);
-            final Notification notification = new Notification(R.drawable.icon, text, System.currentTimeMillis());
-            final PendingIntent contentIntent = PendingIntent.getActivity(this, 0, new Intent(this, MSLoggerActivity.class), 0);
-            notification.setLatestEventInfo(this, getText(msgId), text, contentIntent);
-            notifications.notify(NOTIFICATION_ID, notification);
-        }
-    }
-
-    @Override
-    public void onDestroy()
-    {
-        super.onDestroy();
-        notifications.cancelAll();
-        // Do not forget to unregister the receiver!!!
-        this.unregisterReceiver(this.yourReceiver);
+    
+    //////////////////////////////////////////////////////////////////////////////////////
+    // Lifecycle Methods
+    //////////////////////////////////////////////////////////////////////////////////////
+    
+    /**
+     * Starts the communication to/from the ECU asynchronously.  This method will return immediately.
+     * Use notifications to receive status updates.  Does nothing if already started.
+     */
+    public synchronized void start() {
+    	if (currentState == MegasquirtState.DISCONNECTED) {
+	    	LOG.info("Starting MegaSquirt.");
+	
+	    	ecuThread = new ECUThread();
+	        ecuThread.start();
+    	}
     }
 
     /**
-     * Shortcut function to access data tables. Makes the INI->Java translation a little simpler
-     * 
-     * @param i1 index into table
-     * @param name table name
-     * @return value from table
+     * Stops the communication to/from the ECU and terminates logging if it was enabled.
+     * Does nothing if already stopped.
      */
-    protected int table(final int i1, final String name)
-    {
-        return TableManager.INSTANCE.table(i1, name);
-    }
-
-    @Override
-    public int table(final double d1, final String name)
-    {
-        return table((int) d1, name);
+    public synchronized void stop() {
+    	if (currentState == MegasquirtState.CONNECTED || currentState == MegasquirtState.CONNECTING) {
+	    	LOG.info("Stopping MegaSquirt.");
+	    	stopLogging();
+	    	ecuThread.cancel();
+	    	ecuThread = null;
+    	}
     }
 
     /**
-     * Add a command for the ECUThread to process when it can
-     * 
-     * @param command
+     * Revert to initial state.
      */
-    public void injectCommand(final InjectedCommand command)
-    {
-        injectionQueue.add(command);
+    public void reset() {
+        ecuImplementation.refreshFlags();
+        constantsLoaded = false;
     }
-
+    
     /**
      * @return true if we're connected to an ECU, false otherwise
      */
-    public boolean isConnected()
-    {
-        return (currentState == State.CONNECTED) || (currentState == State.LOGGING);
+    public synchronized boolean isConnected() {
+        return (currentState == MegasquirtState.CONNECTED);
     }
-
+    
     /**
-     * @return true if we're data logging the ECU realtime stream, false otherwise
+     * Enables logging, if connected.  Logging is disabled by default.
      */
-    public boolean isLogging()
-    {
-        return currentState == State.LOGGING;
-    }
-
-    /**
-     * Temperature unit conversion function
-     * 
-     * @param t temp in F
-     * @return temp in C if CELSIUS is set, in F otherwise
-     */
-    @Override
-    public double tempCvt(final double t)
-    {
-        if (isSet("CELSIUS"))
-        {
-            return ((t - 32.0) * 5.0) / 9.0;
+    public synchronized void startLogging() {
+        if (!logging && currentState == MegasquirtState.CONNECTED) {
+            LOG.debug("Starting logging at {}.", new Date());
+            try {
+                log.start();
+                logStartTime = System.currentTimeMillis();
+                logging = true;
+                // TODO send message
+            } catch (IOException e) {
+                LOG.error("Error starting logging.", e);
+                try {
+                    log.stop();
+                } catch (IOException e2) {
+                    LOG.warn("Error stopping logging after failed start.", e2);
+                }
+                
+                // TODO send message
+                
+                logging = false;
+            }
         }
-        else
-        {
+    }
+
+    /**
+     * Disables logging, even if not connected.
+     */
+    public synchronized void stopLogging() {
+        if (logging) {
+            Date now = new Date();
+            LOG.debug("Stapping logging at {}.  Logging was active for {}ms.",
+                    now, now.getTime() - logStartTime);
+            logging = false;
+            
+            // TODO stop logging and send messages
+            if (!logThread.cancel()) {
+                LOG.error("Error stopping the logging thread cleanly.  Closing log(s) anyway.");
+            }
+            
+            try {
+                log.stop();
+            } catch (IOException e) {
+                LOG.error("Error stopping logging.", e);
+            }
+        }
+    }
+    
+    /**
+     * Returns true if we're data logging the ECU real-time stream, false otherwise.
+     */
+    public synchronized boolean isLogging() {
+        return logging;
+    }
+    
+	//////////////////////////////////////////////////////////////////////////////////////
+	// MSControllerInterface Methods
+	//////////////////////////////////////////////////////////////////////////////////////
+    
+    @Override
+    public int table(final double d1, final String name) {
+    	return tableManager.table((int) d1, name);
+    }
+    
+    @Override
+    public double tempCvt(final double t) {
+    	if (configuration.isSet("CELCIUS")) {
+            return (t - 32.0d) * 5.0d / 9.0d;
+        } else {
             return t;
         }
     }
-
-    /**
-     * Launch the ECU thread
-     */
-    public synchronized void start()
-    {
-        DebugLogManager.INSTANCE.log("Megasquirt.start()", Log.INFO);
-
-        if (ApplicationSettings.INSTANCE.getECUBluetoothMac().equals(ApplicationSettings.MISSING_VALUE))
-        {
-            broadcast(UNKNOWN_ECU_BT);
-        }
-        else
-        {
-            setState(State.DISCONNECTED);
-            ecuThread = new ECUThread();
-            ecuThread.start();
-        }
-    }
-
-    /**
-     * Shut down the ECU thread
-     */
-    public synchronized void stop()
-    {
-        DebugLogManager.INSTANCE.log("Megasquirt.stop()", Log.INFO);
-
-        ecuThread = null;
-
-        setState(State.DISCONNECTED);
-        broadcast(DISCONNECTED);
-    }
-
-    /**
-     * Revert to initial state
-     */
-    public void reset()
-    {
-        ecuImplementation.refreshFlags();
-        constantsLoaded = false;
-        notifications.cancelAll();
-    }
-
-    /**
-     * Output the current values to be logged
-     */
-    private void logValues(final byte[] buffer)
-    {
-        if (!isLogging())
-        {
-            return;
-        }
-        try
-        {
-            FRDLogManager.INSTANCE.write(buffer);
-            DatalogManager.INSTANCE.write(ecuImplementation.getLogRow());
-
-        }
-        catch (final IOException e)
-        {
-            DebugLogManager.INSTANCE.logException(e);
-        }
-    }
-
-    /**
-     * Shutdown the data connection to the MS
-     */
-    private void disconnect()
-    {
-        if (simulated)
-        {
-            return;
-        }
-
-        DebugLogManager.INSTANCE.log("Disconnect", Log.INFO);
-
-        ECUConnectionManager.getInstance().disconnect();
-        DatalogManager.INSTANCE.mark("Disconnected");
-        FRDLogManager.INSTANCE.close();
-        DatalogManager.INSTANCE.close();
-        broadcast(DISCONNECTED);
-    }
-
-    /**
-     * Send a message to the user
-     * 
-     * @param msg Message to be sent
-     */
-    protected void sendMessage(final String msg)
-    {
-        broadcast(ApplicationSettings.GENERAL_MESSAGE, msg);
-    }
-
-    /**
-     * Send a toast message to the user
-     * 
-     * @param message to be sent
-     */
-    protected void sendToastMessage(final String msg)
-    {
-        final Intent broadcast = new Intent();
-        broadcast.setAction(ApplicationSettings.TOAST);
-        broadcast.putExtra(ApplicationSettings.TOAST_MESSAGE, msg);
-        sendBroadcast(broadcast);
-    }
-
-    /**
-     * Send the reads per second to be displayed on the screen
-     * 
-     * @param RPS the current reads per second value
-     */
-    private void sendRPS(final double RPS)
-    {
-
-        final Intent broadcast = new Intent();
-        broadcast.setAction(ApplicationSettings.RPS_MESSAGE);
-        broadcast.putExtra(ApplicationSettings.RPS, decimalFormat1dp.format(RPS));
-        sendBroadcast(broadcast);
-    }
-
-    /**
-     * Send a status update to the rest of the application
-     * 
-     * @param action
-     */
-    private void broadcast(final String action)
-    {
-        final Intent broadcast = new Intent();
-        broadcast.setAction(action);
-        sendBroadcast(broadcast);
-    }
-
-    private void broadcast(final String action, final String data)
-    {
-        DebugLogManager.INSTANCE.log("Megasquirt.broadcast(" + action + "," + data + ")", Log.VERBOSE);
-        final Intent broadcast = new Intent();
-        broadcast.setAction(action);
-        broadcast.putExtra(ApplicationSettings.MESSAGE, data);
-        sendBroadcast(broadcast);
-    }
-
-    private void broadcast()
-    {
-        final Intent broadcast = new Intent();
-        broadcast.setAction(NEW_DATA);
-
-        sendBroadcast(broadcast);
-
-    }
-
-    /**
-     * How long have we been running?
-     * 
-     * @return
-     */
+    
     @Override
-    public double timeNow()
-    {
-        if (logStart == 0)
-        {
-            logStart = DatalogManager.INSTANCE.getLogStart();
-        }
-        final long runTime = System.currentTimeMillis() - logStart;
-        final double timeNow = runTime / 1000.0;
-
-        return timeNow;
+    public double timeNow() {
+        return (System.currentTimeMillis() - logStartTime) / 1000.0d;
     }
-
-    /**
-     * Flag the logging process to happen
-     */
-    public void startLogging()
-    {
-        if (currentState == State.CONNECTED)
-        {
-            currentState = State.LOGGING;
-            DebugLogManager.INSTANCE.log("startLogging()", Log.INFO);
-        }
-    }
-
-    /**
-     * Stop the logging process
-     */
-    public void stopLogging()
-    {
-        if (currentState == State.LOGGING)
-        {
-            DebugLogManager.INSTANCE.log("stopLogging()", Log.INFO);
-            currentState = State.CONNECTED;
-            FRDLogManager.INSTANCE.close();
-            DatalogManager.INSTANCE.close();
-        }
-    }
-
-    /**
-     * Take a wild stab at what this does.
-     * 
-     * @param v
-     * @return
-     */
+    
     @Override
-    public double round(final double v)
-    {
+    public double round(final double v) {
         return Math.floor((v * 100) + .5) / 100;
     }
-
-    /**
-     * Returns if a flag has been set in the application
-     * 
-     * @param name
-     * @return
-     */
+    
     @Override
-    public boolean isSet(final String name)
+    public boolean isSet(final String name) {
+        return configuration.isSet(name);
+    }
+    
+    @Override
+	public byte[] loadPage(final int pageNo, final int pageOffset,
+			final int pageSize, final byte[] select, final byte[] read) {
+
+		final byte[] buffer = new byte[pageSize];
+		
+		try {
+			LOG.debug("Loading constants from page {}.", pageNo);
+			getPage(buffer, select, read);
+			logPageToFile(pageNo, buffer);
+			LOG.debug("Loaded constants from page {}.", pageNo);
+		} catch (IOException e) {
+			LOG.error("Error loading constants from page " + pageNo + ".", e);
+			// TODO what do we do about the error?
+		}
+		
+		return buffer;
+	}
+    
+    @Override
+	public int[][] loadByteArray(final byte[] pageBuffer, final int offset,
+			final int width, final int height, final boolean signed) {
+		final int[][] destination = new int[width][height];
+		int index = offset;
+		for (int y = 0; y < height; y++) {
+			for (int x = 0; x < width; x++) {
+				final int value = signed ? MSUtils.INSTANCE.getSignedByte(
+						pageBuffer, index) : MSUtils.INSTANCE.getByte(
+						pageBuffer, index);
+				destination[x][y] = value;
+				index = index + 1;
+			}
+		}
+		return destination;
+	}
+
+	@Override
+	public int[] loadByteVector(final byte[] pageBuffer, final int offset,
+			final int width, final boolean signed) {
+		final int[] destination = new int[width];
+		int index = offset;
+		for (int x = 0; x < width; x++) {
+			final int value = signed ? MSUtils.INSTANCE.getSignedByte(
+					pageBuffer, index) : MSUtils.INSTANCE.getByte(pageBuffer,
+					index);
+			destination[x] = value;
+			index = index + 1;
+		}
+
+		return destination;
+	}
+
+	@Override
+	public int[][] loadWordArray(final byte[] pageBuffer, final int offset,
+			final int width, final int height, final boolean signed) {
+		final int[][] destination = new int[width][height];
+		int index = offset;
+		for (int y = 0; y < height; y++) {
+			for (int x = 0; x < width; x++) {
+				final int value = signed ? MSUtils.INSTANCE.getSignedWord(
+						pageBuffer, index) : MSUtils.INSTANCE.getWord(
+						pageBuffer, index);
+				destination[x][y] = value;
+				index = index + 2;
+			}
+		}
+
+		return destination;
+	}
+
+	@Override
+	public int[] loadWordVector(final byte[] pageBuffer, final int offset,
+			final int width, final boolean signed) {
+		final int[] destination = new int[width];
+		int index = offset;
+		for (int x = 0; x < width; x++) {
+			final int value = signed ? MSUtils.INSTANCE.getSignedWord(
+					pageBuffer, index) : MSUtils.INSTANCE.getWord(pageBuffer,
+					index);
+			destination[x] = value;
+			index = index + 2;
+		}
+
+		return destination;
+	}
+    
+    @Override
+    public void registerOutputChannel(final OutputChannel o) {
+        DataManager.getInstance().addOutputChannel(o);
+
+    }
+    
+	//////////////////////////////////////////////////////////////////////////////////////
+	// ListenerRegistry Methods
+	//////////////////////////////////////////////////////////////////////////////////////
+    
+    @Override
+	public void addListener(
+			NotificationListener<MegasquirtNotificationType> listener) {
+		notificationListenerManager.addListener(listener);
+	}
+
+	@Override
+	public void removeListener(
+			NotificationListener<MegasquirtNotificationType> listener) {
+		notificationListenerManager.removeListener(listener);
+	}
+
+	@Override
+	public void addWeakReferenceListener(
+			NotificationListener<MegasquirtNotificationType> listener) {
+		notificationListenerManager.addWeakReferenceListener(listener);
+	}
+
+	@Override
+	public void removeWeakReferenceListener(
+			NotificationListener<MegasquirtNotificationType> listener) {
+		notificationListenerManager.removeWeakReferenceListener(listener);
+	}
+	
+	//////////////////////////////////////////////////////////////////////////////////////
+	// General Public Methods
+	//////////////////////////////////////////////////////////////////////////////////////
+    
+	/**
+	 * Helper function to know if a constant name exists.
+	 * 
+	 * @param name
+	 *            The name of the constant
+	 * @return true if the constant exists, false otherwise
+	 */
+	public boolean isConstantExists(final String name) {
+		return MSECUInterface.constants.containsKey(name);
+	}
+
+	/**
+	 * Get a constant from the ECU class.
+	 * 
+	 * @param name
+	 *            The name of the constant
+	 * @return The constant object
+	 */
+	public Constant getConstantByName(final String name) {
+		return MSECUInterface.constants.get(name);
+	}
+
+	/**
+	 * Get an output channel from the ECU class.
+	 * 
+	 * @param name
+	 *            The name of the output channel
+	 * @return The output channel object
+	 */
+	public OutputChannel getOutputChannelByName(final String name) {
+		return MSECUInterface.outputChannels.get(name);
+	}
+
+	/**
+	 * Get a table editor from the ECU class.
+	 * 
+	 * @param name
+	 *            The name of the table editor object
+	 * @return The table editor object
+	 */
+	public TableEditor getTableEditorByName(final String name) {
+		return MSECUInterface.tableEditors.get(name);
+	}
+
+	/**
+	 * Get a curve editor from the ECU class.
+	 * 
+	 * @param name
+	 *            The name of the curve editor object
+	 * @return The curve editor object
+	 */
+	public CurveEditor getCurveEditorByName(final String name) {
+		return MSECUInterface.curveEditors.get(name);
+	}
+
+	/**
+	 * Get a list of menus from the ECU class.
+	 * 
+	 * @param name
+	 *            The name of the menu tree
+	 * @return A list of menus object
+	 */
+	public List<Menu> getMenusForDialog(final String name) {
+		return MSECUInterface.menus.get(name);
+	}
+
+	/**
+	 * Get a dialog from the ECU class.
+	 * 
+	 * @param name
+	 *            The name of the dialog object
+	 * @return The dialog object
+	 */
+	public MSDialog getDialogByName(final String name) {
+		return MSECUInterface.dialogs.get(name);
+	}
+
+	/**
+	 * Get a visibility flag for a user defined (dialog, field, panel, etc).  Used
+	 * for field in dialog, for example.
+	 * 
+	 * @param name
+	 *            The name of the user defined flag
+	 * @return true if visible, false otherwise
+	 */
+	public boolean getUserDefinedVisibilityFlagsByName(final String name) {
+		if (MSECUInterface.userDefinedVisibilityFlags.containsKey(name)) {
+			return MSECUInterface.userDefinedVisibilityFlags.get(name);
+		}
+
+		return true;
+	}
+
+	/**
+	 * Get a visibility flag for a menu.
+	 * 
+	 * @param name
+	 *            The name of the menu flag
+	 * @return true if visible, false otherwise
+	 */
+	public boolean getMenuVisibilityFlagsByName(final String name) {
+		return MSECUInterface.menuVisibilityFlags.get(name);
+	}
+
+	/**
+	 * Add a dialog to the list of dialogs in the ECU class.
+	 * 
+	 * @param dialog
+	 *            The dialog object to add
+	 */
+	public void addDialog(final MSDialog dialog) {
+		MSECUInterface.dialogs.put(dialog.getName(), dialog);
+	}
+
+	/**
+	 * Add a curve to the list of curves in the ECU class.
+	 * 
+	 * @param curve
+	 *            The curve object to add
+	 */
+	public void addCurve(final CurveEditor curve) {
+		MSECUInterface.curveEditors.put(curve.getName(), curve);
+	}
+
+	/**
+	 * Add a constant to the list of constants in the ECU class.
+	 * 
+	 * @param constant
+	 *            The constant object to add
+	 */
+	public void addConstant(final Constant constant) {
+		MSECUInterface.constants.put(constant.getName(), constant);
+	}
+
+	/**
+	 * Used to get a list of all constants name used in a specific dialog.
+	 * 
+	 * @param dialog
+	 *            The dialog to get the list of constants name
+	 * @return A list of constants name
+	 */
+	public List<String> getAllConstantsNamesForDialog(final MSDialog dialog) {
+		final List<String> constants = new ArrayList<String>();
+		return buildListOfConstants(constants, dialog);
+	}
+	
+	public int getBlockSize() {
+		return ecuImplementation.getBlockSize();
+	}
+
+	public int getCurrentTPS() {
+		return ecuImplementation.getCurrentTPS();
+	}
+
+	public String getLogHeader() {
+		return ecuImplementation.getLogHeader();
+	}
+
+	public void refreshFlags() {
+		ecuImplementation.refreshFlags();
+	}
+
+	public void setMenuVisibilityFlags() {
+		ecuImplementation.setMenuVisibilityFlags();
+	}
+
+	public void setUserDefinedVisibilityFlags() {
+		ecuImplementation.setUserDefinedVisibilityFlags();
+
+	}
+
+	public String[] getControlFlags() {
+		return ecuImplementation.getControlFlags();
+	}
+
+	public List<String> getRequiresPowerCycle() {
+		return ecuImplementation.getRequiresPowerCycle();
+	}
+
+	public List<SettingGroup> getSettingGroups() {
+		ecuImplementation.createSettingGroups();
+		return ecuImplementation.getSettingGroups();
+	}
+
+	public Map<String, String> getControllerCommands() {
+		ecuImplementation.createControllerCommands();
+		return ecuImplementation.getControllerCommands();
+	}
+
+	/**
+	 * Helper functions to get specific value out of ECU Different MS version
+	 * have different name for the same thing so get the right one depending on
+	 * the MS version we're connected to
+	 */
+
+	/**
+	 * @return the current ECU cylinders count
+	 */
+	public int getCylindersCount() {
+		return (int) (isConstantExists("nCylinders") ? getField("nCylinders")
+				: getField("nCylinders1"));
+	}
+
+	/**
+	 * @return the current ECU injectors count
+	 */
+	public int getInjectorsCount() {
+		return (int) (isConstantExists("nInjectors") ? getField("nInjectors")
+				: getField("nInjectors1"));
+	}
+
+	/**
+	 * @return the current ECU divider
+	 */
+	public int getDivider() {
+		return (int) (isConstantExists("divider") ? getField("divider")
+				: getField("divider1"));
+	}
+
+	/**
+	 * Return the current ECU injector staging.
+	 * 
+	 * @return 0 = Simultaneous, 1 = Alternating
+	 */
+	public int getInjectorStaging() {
+		return (int) (isConstantExists("alternate") ? getField("alternate")
+				: getField("alternate1"));
+	}
+
+	public double getField(final String channelName) {
+		return DataManager.getInstance().getField(channelName);
+	}
+    
+	/**
+	 * Add a command for the ECUThread to process when it can
+	 * 
+	 * @param command
+	 */
+	public void injectCommand(final InjectedCommand command) {
+		injectionQueue.add(command);
+	}
+
+	/**
+	 * Returns the true signature of the Megasquirt firmware with which we are
+	 * communicating.
+	 */
+	public String getTrueSignature() {
+		return trueSignature;
+	}
+
+	/**
+	 * Write a constant back to the ECU
+	 * 
+	 * @param constant
+	 *            the constant to write
+	 */
+	public void writeConstant(final Constant constant) {
+		final List<String> pageIdentifiers = ecuImplementation
+				.getPageIdentifiers();
+		final List<String> pageValueWrites = ecuImplementation
+				.getPageValueWrites();
+
+		// Ex: U08, S16
+		final String type = constant.getType();
+
+		// 8 bits = 1 byte by default
+		int size = 1;
+		if (type.contains("16")) {
+			size = 2; // 16 bits = 2 bytes
+		}
+
+		final int pageNo = constant.getPage();
+		final int offset = constant.getOffset();
+
+		int[] msValue = null;
+
+		// Constant to write is of type scalar or bits
+		if (constant.getClassType().equals("scalar")
+				|| constant.getClassType().equals("bits")) {
+			msValue = new int[1];
+			msValue[0] = (int) getField(constant.getName());
+		}
+		// Constant to write to ECU is of type array
+		else if (constant.getClassType().equals("array")) {
+			final int shape[] = MSUtilsShared.getArraySize(constant.getShape());
+
+			final int width = shape[0];
+			final int height = shape[1];
+
+			// Vector
+			if (height == -1) {
+				size *= width;
+				msValue = getVector(constant.getName());
+			}
+			// Array
+			else {
+				// Flatten array into msValue
+				final int[][] array = getArray(constant.getName());
+				int i = 0;
+
+				size *= width * height;
+				msValue = new int[width * height];
+
+				for (int y = 0; y < height; y++) {
+					for (int x = 0; x < width; x++) {
+						msValue[i++] = array[x][y];
+					}
+				}
+
+			}
+		}
+
+        // Make sure we have something to send to the MS
+        if ((msValue != null) && (msValue.length > 0)) {
+            final String writeCommand = pageValueWrites.get(pageNo - 1);
+			final String command = MSUtilsShared.HexStringToBytes(
+					pageIdentifiers, writeCommand, offset, size, msValue,
+					pageNo);
+            final byte[] byteCommand = MSUtils.INSTANCE.commandStringtoByteArray(command);
+
+            if (LOG.isDebugEnabled()) {
+	            LOG.debug(
+	            		"Writing to MS: command: {} constant: {} msValue: {} pageValueWrite: {} "
+	            				+ "offset: {} count: {} pageNo: {}",
+        				new Object[] {command, constant.getName(), Arrays.toString(msValue), 
+	            						writeCommand, offset, size, pageNo});
+            }
+            
+            final List<byte[]> pageActivates = ecuImplementation.getPageActivates();
+
+            try {
+                final int delay = ecuImplementation.getPageActivationDelay();
+
+                // MS1 use page select command
+                if (pageActivates.size() >= pageNo) {
+                    final byte[] pageSelectCommand = pageActivates.get(pageNo - 1);
+                    
+                    ioManager.write(pageSelectCommand, getProtocolHandler());
+                    // TODO perform delay here using delay
+                }
+
+                final InjectedCommand writeToRAM = new InjectedCommand(byteCommand, 300, false, 0);
+                injectCommand(writeToRAM);
+
+                LOG.debug("Writing constant {} to Megasquirt.", constant.getName());
+            } catch (IOException e) {
+            	LOG.error("Error writing constant to Megasquirt.", e);
+            }
+
+            burnPage(pageNo);
+        }
+        // Nothing to send to the MS, maybe unsupported constant type ?
+        else {
+        	LOG.debug("Couldn't find any value to write, maybe unsupported constant type {}.", constant.getType());
+        }
+    }
+    
+	/**
+	 * Get an array from the ECU.
+	 * 
+	 * @param channelName
+	 *            the variable name to modify
+	 */
+    public int[][] getArray(final String channelName)
     {
-        return ApplicationSettings.INSTANCE.isSet(name);
+        int[][] value = { { 0 }, { 0 } };
+        final Class<?> c = ecuImplementation.getClass();
+        try {
+            final Field f = c.getDeclaredField(channelName);
+            value = (int[][]) f.get(ecuImplementation);
+        } catch (Exception e) {
+        	// TODO what to do with the error?
+        	LOG.error("Failed to get array value for " + channelName + ".", e);
+        }
+        return value;
     }
 
-    /**
-     * The thread that handles all communications with the ECU. This must be done in it's own thread as Android gets very picky about unresponsive UI
-     * threads
-     */
-    private class ECUThread extends Thread
+	/**
+	 * Get a vector from the ECU.
+	 * 
+	 * @param channelName
+	 *            the variable name to modify
+	 */
+    public int[] getVector(final String channelName)
     {
-        private class CalculationThread extends Thread
-        {
-            private volatile boolean running = true;
-
-            public void halt()
-            {
-                DebugLogManager.INSTANCE.log("CalculationThread.halt()", Log.INFO);
-
-                running = false;
-            }
-
-            @Override
-            public void run()
-            {
-                this.setName("CalculationThread");
-                try
-                {
-                    while (running)
-                    {
-                        final byte[] buffer = handshake.get();
-                        if (ecuImplementation != null)
-                        {
-                            ecuImplementation.calculate(buffer);
-                            logValues(buffer);
-                            broadcast();
-                        }
-                    }
-                }
-                catch (final InterruptedException e)
-                {
-                    // Swallow, we're on our way out.
-                }
-            }
-
+        int[] value = { 0 };
+        final Class<?> c = ecuImplementation.getClass();
+        try {
+            final Field f = c.getDeclaredField(channelName);
+            value = (int[]) f.get(ecuImplementation);
+        } catch (final Exception e) {
+        	// TODO what to do with the error?
+        	LOG.error("Failed to get vector value for " + channelName + ".", e);
         }
+        return value;
+    }
+	
+    public void setField(final String channelName, final int value) {
+        final Class<?> c = ecuImplementation.getClass();
 
-        class Handshake
+		try {
+			final Field f = c.getDeclaredField(channelName);
+			f.setInt(ecuImplementation, value);
+		} catch (NoSuchFieldException e) {
+			LOG.error("Failed to set value to " + value + " for " + channelName
+					+ ".", e);
+		} catch (IllegalArgumentException e) {
+			LOG.error("Failed to set value to " + value + " for " + channelName
+					+ ".", e);
+		} catch (IllegalAccessException e) {
+			LOG.error("Failed to set value to " + value + " for " + channelName
+					+ ".", e);
+		}
+    }
+
+	/**
+	 * Set a vector based value in the ECU class.
+	 * 
+	 * @param channelName
+	 *            the variable name to modify
+	 * @param xBins
+	 *            the value to set
+	 */
+	public void setVector(final String channelName, final int[] xBins) {
+		final Class<?> c = ecuImplementation.getClass();
+
+		try {
+			final Field f = c.getDeclaredField(channelName);
+			f.set(ecuImplementation, xBins);
+		} catch (final NoSuchFieldException e) {
+			LOG.error("Failed to set value to " + xBins + " for " + channelName
+					+ ".", e);
+
+		} catch (final IllegalArgumentException e) {
+			LOG.error("Failed to set value to " + xBins + " for " + channelName
+					+ ".", e);
+		} catch (final IllegalAccessException e) {
+			LOG.error("Failed to set value to " + xBins + " for " + channelName
+					+ ".", e);
+		}
+	}
+
+	/**
+	 * Set an array based value in the ECU class.
+	 * 
+	 * @param channelName
+	 *            the variable name to modify
+	 * @param zBins
+	 *            the value to set
+	 */
+	public void setArray(final String channelName, final int[][] zBins) {
+		final Class<?> c = ecuImplementation.getClass();
+
+		try {
+			final Field f = c.getDeclaredField(channelName);
+			f.set(ecuImplementation, zBins);
+		} catch (final NoSuchFieldException e) {
+			LOG.error("Failed to set value to " + zBins + " for " + channelName
+					+ ".", e);
+
+		} catch (final IllegalArgumentException e) {
+			LOG.error("Failed to set value to " + zBins + " for " + channelName
+					+ ".", e);
+		} catch (final IllegalAccessException e) {
+			LOG.error("Failed to set value to " + zBins + " for " + channelName
+					+ ".", e);
+		}
+	}
+	
+	/**
+	 * Helper function for getAllConstantsNamesForDialog() which builds the
+	 * array of constants name.
+	 * 
+	 * @param constants
+	 * @param dialog
+	 */
+	private List<String> buildListOfConstants(final List<String> constants,
+			final MSDialog dialog) {
+		for (final DialogField df : dialog.getFieldsList()) {
+			if (!df.getName().equals("null")) {
+				constants.add(df.getName());
+			}
+		}
+
+		for (final DialogPanel dp : dialog.getPanelsList()) {
+			final MSDialog dialogPanel = this.getDialogByName(dp.getName());
+
+			if (dialogPanel != null) {
+				buildListOfConstants(constants, dialogPanel);
+			}
+		}
+
+		return constants;
+	}
+
+	/**
+	 * Returns the protocol handler needed for the Megasquirt, or {@code null} if
+	 * one is not needed.
+	 */
+	private IoProtocolHandler getProtocolHandler() {
+    	if (ecuImplementation.isCRC32Protocol()) {
+    		return MS_CRC32_PROTOCOL_HANDLER;
+    	} else {
+    		return null;
+    	}
+    }
+    
+    /**
+     * Output the current values to be logged.
+     */
+    private void logValues(final byte[] buffer) {
+        if (isLogging()) {
+        	try {
+                log.write(this);
+            } catch (IOException e) {
+                LOG.error("Error writing to log.", e);
+            } 
+        }
+    }
+    
+    /**
+	 * Read a page of constants from the ECU into a byte buffer. MS1 uses a
+	 * select/read combo, MS2 just does a read.
+	 * 
+	 * @param pageBuffer
+	 *            the buffer to read into
+	 * @param pageSelectCommand
+	 *            the command to select the page to read
+	 * @param pageReadCommand
+	 *            the command to read the page
+	 * @throws IOException
+	 *             if there is an error processing the request
+	 */
+	protected void getPage(final byte[] pageBuffer,
+			final byte[] pageSelectCommand, final byte[] pageReadCommand)
+			throws IOException {
+		
+		try {
+			ioManager.flushAll();
+            
+            final long delay = ecuImplementation.getPageActivationDelay();
+            if (pageSelectCommand != null) {
+                ioManager.write(pageSelectCommand, getProtocolHandler());
+                
+                if (delay > 0) {
+                	Thread.sleep(delay);
+                }
+            }
+            
+            if (pageReadCommand != null) {
+            	ioManager.write(pageReadCommand, getProtocolHandler());
+                if (delay > 0) {
+                	Thread.sleep(delay);
+                }
+            }
+            
+            ioManager.read(pageBuffer, 2000, getProtocolHandler());
+		} catch (InterruptedException e) {
+			throw new IOException("Interrupted during page retrieval.", e);
+		}
+    }
+	
+	/**
+	 * Get the current variables from the ECU.
+	 * 
+	 * @throws IOException
+	 *             if there is an error processing the request
+	 */
+	private IoManagerResult getRuntimeVars() throws IOException {
+		final byte[] buffer = new byte[ecuImplementation.getBlockSize()];
+
+		final int delay = ecuImplementation.getInterWriteDelay();
+		
+		IoManagerResult result = ioManager.writeAndRead(
+				ecuImplementation.getOchCommand(), buffer, delay, getProtocolHandler());
+		return result;
+	}
+
+    /**
+     * Dumps a loaded page to file storage for analysis if {@link #debugLogDirectory} is
+     * set.
+     * 
+     * @param pageNo the page number being dumped
+     * @param buffer the buffer of content to dump
+     */
+    private void logPageToFile(final int pageNo, final byte[] buffer) {
+    	if (debugLogDirectory != null) {
+	        try {
+	            if (!debugLogDirectory.exists()) {
+	                final boolean mkDirs = debugLogDirectory.mkdirs();
+	                if (!mkDirs) {
+						LOG.error("Unable to create directory MSLogger at {}.",
+								debugLogDirectory.getAbsolutePath());
+	                }
+	            }
+	
+	            final String fileName = ecuImplementation.getClass().getName() + ".firmware";
+	            final File outputFile = new File(debugLogDirectory, fileName);
+	            BufferedOutputStream out = null;
+	            try {
+	                final boolean append = !(pageNo == 1);
+	                out = new BufferedOutputStream(new FileOutputStream(outputFile, append));
+	                LOG.info("Saving page {}. Append = {}.", pageNo, append);
+	                out.write(buffer);
+	                out.flush();
+	            } finally {
+	                if (out != null) {
+	                    try {
+	                    	out.close();
+	                    } catch (IOException e) {
+	                    	LOG.warn("Error closing page output file.", e);
+	                    }
+	                }
+	            }
+	        } catch (IOException e) {
+	        	LOG.error("Error attempting to save page.", e);
+	        }
+    	}
+    }
+    
+    /**
+     * Burn a page from MS RAM to Flash.
+     * 
+     * @param pageNo The page number to burn
+     */
+    private void burnPage(final int pageNo) {
+        // Convert from page to table index that the ECU understand
+        final List<String> pageIdentifiers = ecuImplementation.getPageIdentifiers();
+
+        final String pageIdentifier = pageIdentifiers.get(pageNo - 1).replace("\\$tsCanId\\", "");
+
+        final byte tblIdx = (byte) MSUtilsShared.HexByteToDec(pageIdentifier);
+
+		LOG.debug("Burning page {} (Page identifier: {} - Table index: {})",
+				new Object[] { pageNo, pageIdentifier, tblIdx });
+
+        // Send "b" command for the tblIdx
+		final InjectedCommand burnToFlash = new InjectedCommand(new byte[] {
+				98, 0, tblIdx }, 300, true, Megasquirt.BURN_DATA);
+        injectCommand(burnToFlash);
+    }
+    
+    /**
+     * Probes the ECU for the firmware signature and instantiates the current implementation
+     * class to talk to the ECU.
+     *
+     * @throws Exception if there is an error initializing the implementation
+     */
+    private void initialiseImplementation() throws Exception
+    {
+    	LOG.debug("Checking your ECU.");
+    	
+    	try {
+	    	MsEcuInterfaceFactory factory = MsEcuInterfaceFactory.getInstance();
+	    	String signature = factory.getSignature(ioManager);
+	    	ecuImplementation = factory.getMegasquirt(signature, this);
+	    	
+			if (!signature.equals(ecuImplementation.getSignature())) {
+				trueSignature = ecuImplementation.getSignature();
+				if (LOG.isInfoEnabled()) {
+					LOG.info(
+							"Got unsupported signature from Megasquirt \"{}\""
+									+ "but found a similar supported signature \"{}\"",
+							trueSignature, signature);
+				}
+			}
+		} catch (Exception e) {
+			LOG.error("Error constructing instance of ecu implementation.", e);
+			// TODO what to do here?
+		}
+    }
+    
+    
+
+    private class ECUThread extends GracefulShutdownThread {
+    	
+    	private class LogThread extends GracefulShutdownThread {
+
+    		public LogThread() {
+    			super("ECU Log Thread "
+    					+ LOG_THREAD_INSTANCE_COUNTER.getAndIncrement());
+    		}
+
+    		@Override
+    		public void run() {
+    			int consecutiveErrorCount = 0;
+
+    			try {
+    				try {
+    					while (keepRunning()) {
+    						final byte[] buffer = handshake.get();
+    						if (ecuImplementation != null) {
+    							ecuImplementation.calculate(buffer);
+    							logValues(buffer);
+    						}
+    					}
+    				} catch (Exception e) {
+    					if (!keepRunning()) {
+    						LOG.info("Error while stopping logging thread.");
+    					} else {
+	                        if (consecutiveErrorCount > 5) {
+	                            throw e;
+	                        } else {
+	                            consecutiveErrorCount += 1;
+	                            LOG.warn("Encountered " + consecutiveErrorCount
+	                                    + " consecutive error(s) in logging thread.", e);
+	                        }
+    					}
+                    }
+    			} catch (Exception e) {
+    				LOG.error("Fatal error in log thread.", e);
+    			}
+    		}
+    	}
+		
+        private class Handshake
         {
             private byte[] buffer;
 
@@ -585,1172 +1148,137 @@ public class Megasquirt extends Service implements MSControllerInterface
             }
         }
 
-        Handshake handshake = new Handshake();
-        CalculationThread calculationThread = new CalculationThread();
+        private Handshake handshake = new Handshake();
+        private LogThread calculationThread = new LogThread();
 
-        /**
-         * 
-         */
-        public ECUThread()
-        {
-            if (watch != null)
-            {
-                DebugLogManager.INSTANCE.log("Attempting to create second connection!", Log.ASSERT);
-            }
-            watch = this;
+        public ECUThread() {
             final String name = "ECUThread:" + System.currentTimeMillis();
             setName(name);
-            DebugLogManager.INSTANCE.log("Creating ECUThread named " + name, Log.VERBOSE);
+            LOG.debug("Creating ECUThread named " + name);
             calculationThread.start();
-
-        }
-
-        /**
-         * Kick the connection off
-         */
-        public void initialiseConnection()
-        {
-            // sendMessage("Launching connection");
-
-            // Connection conn = ConnectionFactory.INSTANCE.getConnection();
-            final String btAddress = ApplicationSettings.INSTANCE.getECUBluetoothMac();
-            ECUConnectionManager.getInstance().init(null, btAddress);
         }
 
         /**
          * The main loop of the connection to the ECU
          */
         @Override
-        public void run()
-        {
-            try
-            {
-                setState(Megasquirt.State.CONNECTING);
-                sendMessage("Starting connection");
-                DebugLogManager.INSTANCE.log("BEGIN connectedThread", Log.INFO);
-                initialiseConnection();
+        public void run() {
+        	int consecutiveErrorCount = 0;
+        	
+            try {
+                setState(Megasquirt.MegasquirtState.CONNECTING);
+                LOG.debug("Starting connection {}.", getName());
+                ioManager.connect();
 
-                try
-                {
+                try {
                     Thread.sleep(500);
-                }
-                catch (final InterruptedException e)
-                {
-                    DebugLogManager.INSTANCE.logException(e);
+                } catch (InterruptedException e) {
+                	LOG.warn("Interrupted while sleeping after initialization.");
                 }
 
-                try
-                {
-                    ECUConnectionManager.getInstance().flushAll();
+                try {
+                	ioManager.flushAll();
                     initialiseImplementation();
-                    /*
-                     * Make sure we have calculated runtime vars at least once before refreshing flags. The reason is that the refreshFlags() function
-                     * also trigger the creation of menus/dialogs/tables/curves/etc that use variables such as {clthighlim} in curves that need to
-                     * have their value assigned before being used.
-                     */
-                    try
-                    {
-                        final byte[] bufferRV = getRuntimeVars();
-                        ecuImplementation.calculate(bufferRV);
-                    }
-                    catch (final CRC32Exception e)
-                    {
-                        DebugLogManager.INSTANCE.logException(e);
+					/*
+					 * Make sure we have calculated runtime vars at least once
+					 * before refreshing flags. The reason is that the
+					 * refreshFlags() function also trigger the creation of
+					 * menus/dialogs/tables/curves/etc that use variables such
+					 * as {clthighlim} in curves that need to have their value
+					 * assigned before being used.
+					 */
+                    try {
+                        final IoManagerResult result = getRuntimeVars();
+                        ecuImplementation.calculate(result.getResult());
+                    } catch (IOException e) {
+                    	LOG.error("Error reading initial runtime vars.", e);
+                    	// TODO should we die here?
                     }
 
-                    // Make sure everyone agrees on what flags are set
-                    ApplicationSettings.INSTANCE.refreshFlags();
                     ecuImplementation.refreshFlags();
 
-                    if (!constantsLoaded)
-                    {
+                    if (!constantsLoaded) {
                         // Only do this once so reconnects are quicker
-                        ecuImplementation.loadConstants(simulated);
+                        ecuImplementation.loadConstants();
                         constantsLoaded = true;
-
                     }
-                    sendMessage("Connected to " + getTrueSignature());
-                    setState(Megasquirt.State.CONNECTED);
-                    long lastRpsTime = System.currentTimeMillis();
-                    double readCounter = 0;
-
-                    // This is the actual work. Outside influences will toggle 'running' when we want this to stop
-                    while ((currentState == Megasquirt.State.CONNECTED) || (currentState == Megasquirt.State.LOGGING))
-                    {
-                        try
-                        {
-                            if (injectionQueue.peek() != null)
-                            {
-                                for (final InjectedCommand i : injectionQueue)
-                                {
-                                    processCommand(i);
-                                }
-
-                                injectionQueue.clear();
+                    
+                    LOG.debug("Connected to " + getTrueSignature());
+                    setState(Megasquirt.MegasquirtState.CONNECTED);
+                    
+					// This is the actual work. Outside influences will toggle
+					// 'running' when we want this to stop
+					while ((currentState == Megasquirt.MegasquirtState.CONNECTED)
+							|| (currentState == Megasquirt.MegasquirtState.LOGGING)) {
+                        
+						if (injectionQueue.peek() != null) {
+                            for (final InjectedCommand i : injectionQueue) {
+                                processCommand(i);
                             }
-                            final byte[] buffer = getRuntimeVars();
-                            handshake.put(buffer);
-                        }
-                        catch (final CRC32Exception e)
-                        {
-                            DatalogManager.INSTANCE.mark(e.getLocalizedMessage());
-                            DebugLogManager.INSTANCE.logException(e);
-                        }
-                        readCounter++;
 
-                        final long delay = System.currentTimeMillis() - lastRpsTime;
-                        if (delay > 1000)
-                        {
-                            final double RPS = (readCounter / delay) * 1000;
-                            readCounter = 0;
-                            lastRpsTime = System.currentTimeMillis();
-
-                            if (RPS > 0)
-                            {
-                                sendRPS(RPS);
-                            }
+                            injectionQueue.clear();
                         }
-
+                        
+                        final IoManagerResult result = getRuntimeVars(); 
+                        handshake.put(result.getResult());
                     }
-                }
-                catch (final IOException e)
-                {
-                    DebugLogManager.INSTANCE.logException(e);
-                }
-                catch (final CRC32Exception e)
-                {
-                    DebugLogManager.INSTANCE.logException(e);
-                }
-                catch (final ArithmeticException e)
-                {
-                    // If we get a maths error, we probably have loaded duff constants and hit a divide by zero
+                } catch (final ArithmeticException e) {
+                	// If we get a maths error, we probably have loaded duff constants and hit a divide by zero
                     // force the constants to reload in case it was just a bad data read
-                    DebugLogManager.INSTANCE.logException(e);
-                    constantsLoaded = false;
+                	
+                	if (consecutiveErrorCount > 5) {
+                        throw e;
+                	} else {
+                		LOG.warn("Arithmetic error in ECU thread.  Attempting to reload constants.", e);
+                        constantsLoaded = false;
+                	}
+                } catch (Exception e) {
+                    if (consecutiveErrorCount > 5) {
+                        throw e;
+                    } else {
+                        consecutiveErrorCount += 1;
+                        LOG.warn("Encountered " + consecutiveErrorCount
+                                + " consecutive error(s) in ecu thread.", e);
+                    }
                 }
-                catch (final RuntimeException t)
-                {
-                    DebugLogManager.INSTANCE.logException(t);
-                    throw (t);
-                }
-                // We're on our way out, so drop the connection
-                disconnect();
-            }
-            finally
-            {
-                calculationThread.halt();
-                calculationThread.interrupt();
+            } finally {
+                calculationThread.cancel();
                 watch = null;
             }
         }
 
         private void processCommand(final InjectedCommand i) throws IOException
         {
-            ECUConnectionManager.getInstance().writeCommand(i.getCommand(), i.getDelay(), ecuImplementation.isCRC32Protocol());
+        	ioManager.write(i.getCommand(), getProtocolHandler());
+        	
+        	if (i.getDelay() > 0) {
+        		try {
+					Thread.sleep(i.getDelay());
+				} catch (InterruptedException e) {
+					throw new IOException("Interrupted while processing command.", e);
+				}
+        	}
 
             // If we want to get the result back
-            if (i.isReturnResult())
-            {
-                final Intent broadcast = new Intent();
-                broadcast.setAction(INJECTED_COMMAND_RESULTS);
+            if (i.isReturnResult()) {
+            	// TODO provide a response mechanism
+//                final Intent broadcast = new Intent();
+//                broadcast.setAction(INJECTED_COMMAND_RESULTS);
 
-                final byte[] result = ECUConnectionManager.getInstance().readBytes();
+                final IoManagerResult result = ioManager.read();
+                
 
-                broadcast.putExtra(INJECTED_COMMAND_RESULT_ID, i.getResultId());
-                broadcast.putExtra(INJECTED_COMMAND_RESULT_DATA, result);
-
-                sendBroadcast(broadcast);
+//                broadcast.putExtra(INJECTED_COMMAND_RESULT_ID, i.getResultId());
+//                broadcast.putExtra(INJECTED_COMMAND_RESULT_DATA, result);
+//
+//                sendBroadcast(broadcast);
             }
         }
 
-        private void initialiseImplementation() throws IOException, CRC32Exception
-        {
-            sendMessage("Checking your ECU");
-            final String signature = getSignature();
+        
 
-            setImplementation(signature);
-        }
+		
 
-        private String getSignature() throws IOException, CRC32Exception
-        {
-            final byte[] bootCommand = { 'X' };
-            final String lastSuccessfulProbeCommand = ApplicationSettings.INSTANCE.getPref(LAST_PROBE);
-            final String lastSig = ApplicationSettings.INSTANCE.getPref(LAST_SIG);
-
-            if ((lastSuccessfulProbeCommand != null) && (lastSig != null))
-            {
-                final byte[] probe = lastSuccessfulProbeCommand.getBytes();
-                // We need to loop as a BT adapter can pump crap into the MS at the start which confuses the poor thing.
-                for (int i = 0; i < 3; i++)
-                {
-                    byte[] response = ECUConnectionManager.getInstance().writeAndRead(probe, 50, false);
-                    try
-                    {
-                        final String sig = processResponse(response);
-                        if (lastSig.equals(sig))
-                        {
-                            return sig;
-                        }
-                    }
-                    catch (final BootException e)
-                    {
-                        response = ECUConnectionManager.getInstance().writeAndRead(bootCommand, 500, false);
-                    }
-                }
-            }
-            final String probeCommand1 = "Q";
-            final String probeCommand2 = "S";
-            String probeUsed;
-            int i = 0;
-            String sig = UNKNOWN;
-
-            // IF we don't get it in 20 goes, we're not talking to a Megasquirt
-            while (i++ < 20)
-            {
-                probeUsed = probeCommand1;
-                byte[] response = ECUConnectionManager.getInstance().writeAndRead(probeUsed.getBytes(), 500, false);
-
-                try
-                {
-                    if ((response != null) && (response.length > 1))
-                    {
-                        sig = processResponse(response);
-                    }
-                    else
-                    {
-                        probeUsed = probeCommand2;
-                        response = ECUConnectionManager.getInstance().writeAndRead(probeUsed.getBytes(), 500, false);
-                        if ((response != null) && (response.length > 1))
-                        {
-                            sig = processResponse(response);
-                        }
-                    }
-                    if (!UNKNOWN.equals(sig))
-                    {
-                        ApplicationSettings.INSTANCE.setPref(LAST_PROBE, probeUsed);
-                        ApplicationSettings.INSTANCE.setPref(LAST_SIG, sig);
-                        ECUConnectionManager.getInstance().flushAll();
-                        break;
-                    }
-                }
-                catch (final BootException e)
-                {
-                    /*
-                     * My ECU also occasionally goes to a Boot> prompt on start up (dodgy electrics) so if we see that, force the ECU to start.
-                     */
-                    response = ECUConnectionManager.getInstance().writeAndRead(bootCommand, 500, false);
-                }
-            }
-
-            return sig;
-        }
-
-        /**
-         * Attempt to figure out the data we got back from the device
-         * 
-         * @param response
-         * @return
-         * @throws BootException
-         */
-        private String processResponse(final byte[] response) throws BootException
-        {
-            final String result = new String(response);
-            trueSignature = result;
-            if (result.contains("Boot>"))
-            {
-                throw new BootException();
-            }
-
-            if (response == null)
-            {
-                return UNKNOWN;
-            }
-
-            // Early ECUs only respond with one byte
-            if ((response.length == 1) && (response[0] != 20))
-            {
-                return UNKNOWN;
-            }
-
-            if (response.length <= 1)
-            {
-                return UNKNOWN;
-            }
-
-            // Examine the first few bytes and see if it smells of one of the things an MS may say to us.
-            if (((response[0] != 'M') && (response[0] != 'J')) || ((response[1] != 'S') && (response[1] != 'o') && (response[1] != 'i')))
-            {
-                return UNKNOWN;
-            }
-
-            // Looks like we have a Megasquirt
-            return result;
-        }
-
-        /**
-         * Get the current variables from the ECU
-         * 
-         * @throws IOException
-         * @throws CRC32Exception
-         */
-        private byte[] getRuntimeVars() throws IOException, CRC32Exception
-        {
-            final byte[] buffer = new byte[ecuImplementation.getBlockSize()];
-            if (simulated)
-            {
-                MSSimulator.INSTANCE.getNextRTV(buffer);
-                return buffer;
-            }
-
-            final int delay = ecuImplementation.getInterWriteDelay();
-            ECUConnectionManager.getInstance().writeAndRead(ecuImplementation.getOchCommand(), buffer, delay, ecuImplementation.isCRC32Protocol());
-            return buffer;
-        }
-
-        /**
-         * Read a page of constants from the ECU into a byte buffer. MS1 uses a select/read combo, MS2 just does a read
-         * 
-         * @param pageBuffer
-         * @param pageSelectCommand
-         * @param pageReadCommand
-         * @throws IOException
-         */
-        protected void getPage(final byte[] pageBuffer, final byte[] pageSelectCommand, final byte[] pageReadCommand) throws IOException, CRC32Exception
-        {
-            ECUConnectionManager.getInstance().flushAll();
-            final int delay = ecuImplementation.getPageActivationDelay();
-            if (pageSelectCommand != null)
-            {
-                ECUConnectionManager.getInstance().writeCommand(pageSelectCommand, delay, ecuImplementation.isCRC32Protocol());
-            }
-            if (pageReadCommand != null)
-            {
-                ECUConnectionManager.getInstance().writeCommand(pageReadCommand, delay, ecuImplementation.isCRC32Protocol());
-            }
-            ECUConnectionManager.getInstance().readBytes(pageBuffer, ecuImplementation.isCRC32Protocol());
-        }
+		
     }
-
-    /**
-     * 
-     * @return
-     */
-    public String getTrueSignature()
-    {
-        return trueSignature;
-    }
-
-    /**
-     * helper method for subclasses
-     * 
-     * @param pageNo
-     * @param pageOffset
-     * @param pageSize
-     * @param select
-     * @param read
-     * @return
-     */
-    @Override
-    public byte[] loadPage(final int pageNo, final int pageOffset, final int pageSize, final byte[] select, final byte[] read)
-    {
-
-        final byte[] buffer = new byte[pageSize];
-        try
-        {
-            sendMessage("Loading constants from page " + pageNo);
-            getPage(buffer, select, read);
-            savePage(pageNo, buffer);
-            sendMessage("Constants loaded from page " + pageNo);
-        }
-        catch (final IOException e)
-        {
-            e.printStackTrace();
-            DebugLogManager.INSTANCE.logException(e);
-            sendMessage("Error loading constants from page " + pageNo);
-        }
-        catch (final CRC32Exception e)
-        {
-            e.printStackTrace();
-            DebugLogManager.INSTANCE.logException(e);
-            sendMessage("Error loading constants from page " + pageNo);
-        }
-        return buffer;
-    }
-
-    /**
-     * 
-     * @param buffer
-     * @param select
-     * @param read
-     * @throws IOException
-     */
-    private void getPage(final byte[] buffer, final byte[] select, final byte[] read) throws IOException, CRC32Exception
-    {
-        ecuThread.getPage(buffer, select, read);
-    }
-
-    /**
-     * Dumps a loaded page to SD card for analysis
-     * 
-     * @param pageNo
-     * @param buffer
-     */
-    private void savePage(final int pageNo, final byte[] buffer)
-    {
-
-        try
-        {
-            final File dir = new File(Environment.getExternalStorageDirectory(), "MSLogger");
-
-            if (!dir.exists())
-            {
-                final boolean mkDirs = dir.mkdirs();
-                if (!mkDirs)
-                {
-                    DebugLogManager.INSTANCE.log("Unable to create directory MSLogger at " + Environment.getExternalStorageDirectory(), Log.ERROR);
-                }
-            }
-
-            final String fileName = ecuImplementation.getClass().getName() + ".firmware";
-            final File outputFile = new File(dir, fileName);
-            BufferedOutputStream out = null;
-            try
-            {
-                final boolean append = !(pageNo == 1);
-                out = new BufferedOutputStream(new FileOutputStream(outputFile, append));
-                DebugLogManager.INSTANCE.log("Saving page " + pageNo + " append=" + append, Log.INFO);
-                out.write(buffer);
-            }
-            finally
-            {
-                if (out != null)
-                {
-                    out.flush();
-                    out.close();
-                }
-            }
-        }
-        catch (final IOException e)
-        {
-            DebugLogManager.INSTANCE.logException(e);
-        }
-    }
-
-    /**
-     * Write a constant back to the ECU
-     * 
-     * @param constant The constant to write
-     */
-    public void writeConstant(final Constant constant)
-    {
-        final List<String> pageIdentifiers = ecuImplementation.getPageIdentifiers();
-        final List<String> pageValueWrites = ecuImplementation.getPageValueWrites();
-
-        // Ex: U08, S16
-        final String type = constant.getType();
-
-        // 8 bits = 1 byte by default
-        int size = 1;
-        if (type.contains("16"))
-        {
-            size = 2; // 16 bits = 2 bytes
-        }
-
-        final int pageNo = constant.getPage();
-        final int offset = constant.getOffset();
-
-        int[] msValue = null;
-
-        // Constant to write is of type scalar or bits
-        if (constant.getClassType().equals("scalar") || constant.getClassType().equals("bits"))
-        {
-            msValue = new int[1];
-            msValue[0] = (int) getField(constant.getName());
-        }
-        // Constant to write to ECU is of type array
-        else if (constant.getClassType().equals("array"))
-        {
-            final int shape[] = MSUtilsShared.getArraySize(constant.getShape());
-
-            final int width = shape[0];
-            final int height = shape[1];
-
-            // Vector
-            if (height == -1)
-            {
-                size *= width;
-                msValue = getVector(constant.getName());
-            }
-            // Array
-            else
-            {
-                // Flatten array into msValue
-                final int[][] array = getArray(constant.getName());
-                int i = 0;
-
-                size *= width * height;
-                msValue = new int[width * height];
-
-                for (int y = 0; y < height; y++)
-                {
-                    for (int x = 0; x < width; x++)
-                    {
-                        msValue[i++] = array[x][y];
-                    }
-                }
-
-            }
-        }
-
-        // Make sure we have something to send to the MS
-        if ((msValue != null) && (msValue.length > 0))
-        {
-            final String writeCommand = pageValueWrites.get(pageNo - 1);
-            final String command = MSUtilsShared.HexStringToBytes(pageIdentifiers, writeCommand, offset, size, msValue, pageNo);
-            final byte[] byteCommand = MSUtils.INSTANCE.commandStringtoByteArray(command);
-
-            DebugLogManager.INSTANCE.log("Writing to MS: command: " + command + " constant: " + constant.getName() + " msValue: " + Arrays.toString(msValue) + " pageValueWrite: " + writeCommand + " offset: " + offset + " count: " + size
-                    + " pageNo: " + pageNo, Log.DEBUG);
-
-            final List<byte[]> pageActivates = ecuImplementation.getPageActivates();
-
-            try
-            {
-                final int delay = ecuImplementation.getPageActivationDelay();
-
-                // MS1 use page select command
-                if (pageActivates.size() >= pageNo)
-                {
-                    final byte[] pageSelectCommand = pageActivates.get(pageNo - 1);
-                    ECUConnectionManager.getInstance().writeCommand(pageSelectCommand, delay, ecuImplementation.isCRC32Protocol());
-                }
-
-                final InjectedCommand writeToRAM = new InjectedCommand(byteCommand, 300, false, 0);
-                injectCommand(writeToRAM);
-
-                Toast.makeText(this, "Writing constant " + constant.getName() + " to MegaSquirt", Toast.LENGTH_SHORT).show();
-            }
-            catch (final IOException e)
-            {
-                DebugLogManager.INSTANCE.logException(e);
-            }
-
-            burnPage(pageNo);
-        }
-        // Nothing to send to the MS, maybe unsupported constant type ?
-        else
-        {
-            DebugLogManager.INSTANCE.log("Couldn't find any value to write, maybe unsupported constant type " + constant.getType(), Log.DEBUG);
-        }
-    }
-
-    /**
-     * Burn a page from MS RAM to Flash
-     * 
-     * @param pageNo The page number to burn
-     */
-    private void burnPage(final int pageNo)
-    {
-        // Convert from page to table index that the ECU understand
-        final List<String> pageIdentifiers = ecuImplementation.getPageIdentifiers();
-
-        final String pageIdentifier = pageIdentifiers.get(pageNo - 1).replace("\\$tsCanId\\", "");
-
-        final byte tblIdx = (byte) MSUtilsShared.HexByteToDec(pageIdentifier);
-
-        DebugLogManager.INSTANCE.log("Burning page " + pageNo + " (Page identifier: " + pageIdentifier + " - Table index: " + tblIdx + ")", Log.DEBUG);
-
-        // Send "b" command for the tblIdx
-        final InjectedCommand burnToFlash = new InjectedCommand(new byte[] { 98, 0, tblIdx }, 300, true, Megasquirt.BURN_DATA);
-        injectCommand(burnToFlash);
-
-        Toast.makeText(this, "Burning page " + pageNo + " to MegaSquirt", Toast.LENGTH_SHORT).show();
-    }
-
-    /**
-     * Get an array from the ECU
-     * 
-     * @param channelName The variable name to modify
-     * @return
-     */
-    public int[][] getArray(final String channelName)
-    {
-        int[][] value = { { 0 }, { 0 } };
-        final Class<?> c = ecuImplementation.getClass();
-        try
-        {
-            final Field f = c.getDeclaredField(channelName);
-            value = (int[][]) f.get(ecuImplementation);
-        }
-        catch (final Exception e)
-        {
-            DebugLogManager.INSTANCE.log("Failed to get array value for " + channelName, Log.ERROR);
-        }
-        return value;
-    }
-
-    /**
-     * Get a vector from the ECU
-     * 
-     * @param channelName The variable name to modify
-     * @return
-     */
-    public int[] getVector(final String channelName)
-    {
-        int[] value = { 0 };
-        final Class<?> c = ecuImplementation.getClass();
-        try
-        {
-            final Field f = c.getDeclaredField(channelName);
-            value = (int[]) f.get(ecuImplementation);
-        }
-        catch (final Exception e)
-        {
-            DebugLogManager.INSTANCE.log("Failed to get vector value for " + channelName, Log.ERROR);
-        }
-        return value;
-    }
-
-    /**
-     * 
-     * @param channelName
-     * @param value
-     */
-    public void setField(final String channelName, final int value)
-    {
-        final Class<?> c = ecuImplementation.getClass();
-
-        try
-        {
-            final Field f = c.getDeclaredField(channelName);
-            f.setInt(ecuImplementation, value);
-        }
-        catch (final NoSuchFieldException e)
-        {
-            DebugLogManager.INSTANCE.log("Failed to set value to " + value + " for " + channelName + ", no such field", Log.ERROR);
-        }
-        catch (final IllegalArgumentException e)
-        {
-            DebugLogManager.INSTANCE.log("Failed to set value to " + value + " for " + channelName + ", illegal argument", Log.ERROR);
-        }
-        catch (final IllegalAccessException e)
-        {
-            DebugLogManager.INSTANCE.log("Failed to set value to " + value + " for " + channelName + ", illegal access", Log.ERROR);
-        }
-    }
-
-    /**
-     * Set a vector in the ECU class
-     * 
-     * @param channelName The variable name to modify
-     * @param double[]
-     * @return
-     */
-    public void setVector(final String channelName, final int[] xBins)
-    {
-        final Class<?> c = ecuImplementation.getClass();
-
-        try
-        {
-            final Field f = c.getDeclaredField(channelName);
-            f.set(ecuImplementation, xBins);
-        }
-        catch (final NoSuchFieldException e)
-        {
-            DebugLogManager.INSTANCE.log("Failed to set value to " + xBins + " for " + channelName + ", no such field", Log.ERROR);
-        }
-        catch (final IllegalArgumentException e)
-        {
-            DebugLogManager.INSTANCE.log("Failed to set value to " + xBins + " for " + channelName + ", illegal argument", Log.ERROR);
-        }
-        catch (final IllegalAccessException e)
-        {
-            DebugLogManager.INSTANCE.log("Failed to set value to " + xBins + " for " + channelName + ", illegal access", Log.ERROR);
-        }
-    }
-
-    /**
-     * Set an array in the ECU class
-     * 
-     * @param channelName The variable name to modify
-     * @param double[][]
-     * @return
-     * 
-     */
-    public void setArray(final String channelName, final int[][] zBins)
-    {
-        final Class<?> c = ecuImplementation.getClass();
-
-        try
-        {
-            final Field f = c.getDeclaredField(channelName);
-            f.set(ecuImplementation, zBins);
-        }
-        catch (final NoSuchFieldException e)
-        {
-            DebugLogManager.INSTANCE.log("Failed to set value to " + zBins + " for " + channelName + ", no such field", Log.ERROR);
-        }
-        catch (final IllegalArgumentException e)
-        {
-            DebugLogManager.INSTANCE.log("Failed to set value to " + zBins + " for " + channelName + ", illegal argument", Log.ERROR);
-        }
-        catch (final IllegalAccessException e)
-        {
-            DebugLogManager.INSTANCE.log("Failed to set value to " + zBins + " for " + channelName + ", illegal access", Log.ERROR);
-        }
-    }
-
-    /**
-     * Load a byte array contained in pageBuffer from the specified offset and width
-     * 
-     * @param pageBuffer The buffer where the byte array is located
-     * @param offset The offset where the byte array is located
-     * @param width The width of the byte array
-     * @param height The height of the byte array
-     * @param signed Is the data signed ?
-     * 
-     * @return
-     */
-    @Override
-    public int[][] loadByteArray(final byte[] pageBuffer, final int offset, final int width, final int height, final boolean signed)
-    {
-        final int[][] destination = new int[width][height];
-        int index = offset;
-        for (int y = 0; y < height; y++)
-        {
-            for (int x = 0; x < width; x++)
-            {
-                final int value = signed ? MSUtils.INSTANCE.getSignedByte(pageBuffer, index) : MSUtils.INSTANCE.getByte(pageBuffer, index);
-                destination[x][y] = value;
-                index = index + 1;
-            }
-        }
-        return destination;
-    }
-
-    /**
-     * Load a byte vector contained in pageBuffer from the specified offset and width
-     * 
-     * @param pageBuffer The buffer where the byte vector is located
-     * @param offset The offset where the byte vector is located
-     * @param width The width of the byte vector
-     * @param signed Is the data signed ?
-     * 
-     * @return
-     */
-    @Override
-    public int[] loadByteVector(final byte[] pageBuffer, final int offset, final int width, final boolean signed)
-    {
-        final int[] destination = new int[width];
-        int index = offset;
-        for (int x = 0; x < width; x++)
-        {
-            final int value = signed ? MSUtils.INSTANCE.getSignedByte(pageBuffer, index) : MSUtils.INSTANCE.getByte(pageBuffer, index);
-            destination[x] = value;
-            index = index + 1;
-        }
-
-        return destination;
-    }
-
-    /**
-     * Load a word array contained in pageBuffer from the specified offset and width
-     * 
-     * @param pageBuffer The buffer where the word array is located
-     * @param offset The offset where the word array is located
-     * @param width The width of the word array
-     * @param height The height of the word array
-     * @param signed Is the data signed ?
-     * 
-     * @return
-     */
-    @Override
-    public int[][] loadWordArray(final byte[] pageBuffer, final int offset, final int width, final int height, final boolean signed)
-    {
-        final int[][] destination = new int[width][height];
-        int index = offset;
-        for (int y = 0; y < height; y++)
-        {
-            for (int x = 0; x < width; x++)
-            {
-                final int value = signed ? MSUtils.INSTANCE.getSignedWord(pageBuffer, index) : MSUtils.INSTANCE.getWord(pageBuffer, index);
-                destination[x][y] = value;
-                index = index + 2;
-            }
-        }
-
-        return destination;
-    }
-
-    /**
-     * Load a word vector contained in pageBuffer from the specified offset and width
-     * 
-     * @param pageBuffer The buffer where the word vector is located
-     * @param offset The offset where the word vector is located
-     * @param width The width of the word vector
-     * @param signed Is the data signed ?
-     * 
-     * @return
-     */
-    @Override
-    public int[] loadWordVector(final byte[] pageBuffer, final int offset, final int width, final boolean signed)
-    {
-        final int[] destination = new int[width];
-        int index = offset;
-        for (int x = 0; x < width; x++)
-        {
-            final int value = signed ? MSUtils.INSTANCE.getSignedWord(pageBuffer, index) : MSUtils.INSTANCE.getWord(pageBuffer, index);
-            destination[x] = value;
-            index = index + 2;
-        }
-
-        return destination;
-
-    }
-
-    /**
-     * Helper function to know if a constant name exists
-     * 
-     * @param name The name of the constant
-     * @return true if the constant exists, false otherwise
-     */
-    public boolean isConstantExists(final String name)
-    {
-        return MSECUInterface.constants.containsKey(name);
-    }
-
-    /**
-     * Get a constant from the ECU class
-     * 
-     * @param name The name of the constant
-     * @return The constant object
-     */
-    public Constant getConstantByName(final String name)
-    {
-        return MSECUInterface.constants.get(name);
-    }
-
-    /**
-     * Get an output channel from the ECU class
-     * 
-     * @param name The name of the output channel
-     * @return The output channel object
-     */
-    public OutputChannel getOutputChannelByName(final String name)
-    {
-        return MSECUInterface.outputChannels.get(name);
-    }
-
-    /**
-     * Get a table editor from the ECU class
-     * 
-     * @param name The name of the table editor object
-     * @return The table editor object
-     */
-    public TableEditor getTableEditorByName(final String name)
-    {
-        return MSECUInterface.tableEditors.get(name);
-    }
-
-    /**
-     * Get a curve editor from the ECU class
-     * 
-     * @param name The name of the curve editor object
-     * @return The curve editor object
-     */
-    public CurveEditor getCurveEditorByName(final String name)
-    {
-        return MSECUInterface.curveEditors.get(name);
-    }
-
-    /**
-     * Get a list of menus from the ECU class
-     * 
-     * @param name The name of the menu tree
-     * @return A list of menus object
-     */
-    public List<Menu> getMenusForDialog(final String name)
-    {
-        return MSECUInterface.menus.get(name);
-    }
-
-    /**
-     * Get a dialog from the ECU class
-     * 
-     * @param name The name of the dialog object
-     * @return The dialog object
-     */
-    public MSDialog getDialogByName(final String name)
-    {
-        return MSECUInterface.dialogs.get(name);
-    }
-
-    /**
-     * Get a visibility flag for a user defined (dialog, field, panel, etc) Used for field in dialog, for example
-     * 
-     * @param name The name of the user defined flag
-     * @return true if visible, false otherwise
-     */
-    public boolean getUserDefinedVisibilityFlagsByName(final String name)
-    {
-        if (MSECUInterface.userDefinedVisibilityFlags.containsKey(name))
-        {
-            return MSECUInterface.userDefinedVisibilityFlags.get(name);
-        }
-
-        return true;
-    }
-
-    /**
-     * Get a visibility flag for a menu
-     * 
-     * @param name The name of the menu flag
-     * @return true if visible, false otherwise
-     */
-    public boolean getMenuVisibilityFlagsByName(final String name)
-    {
-        return MSECUInterface.menuVisibilityFlags.get(name);
-    }
-
-    /**
-     * Add a dialog to the list of dialogs in the ECU class
-     * 
-     * @param dialog The dialog object to add
-     */
-    public void addDialog(final MSDialog dialog)
-    {
-        MSECUInterface.dialogs.put(dialog.getName(), dialog);
-    }
-
-    /**
-     * Add a curve to the list of curves in the ECU class
-     * 
-     * @param curve The curve object to add
-     */
-    public void addCurve(final CurveEditor curve)
-    {
-        MSECUInterface.curveEditors.put(curve.getName(), curve);
-    }
-
-    /**
-     * Add a constant to the list of constants in the ECU class
-     * 
-     * @param constant The constant object to add
-     */
-    public void addConstant(final Constant constant)
-    {
-        MSECUInterface.constants.put(constant.getName(), constant);
-    }
-
-    /**
-     * Used to get a list of all constants name used in a specific dialog
-     * 
-     * @param dialog The dialog to get the list of constants name
-     * @return A list of constants name
-     */
-    public List<String> getAllConstantsNamesForDialog(final MSDialog dialog)
-    {
-        final List<String> constants = new ArrayList<String>();
-        return buildListOfConstants(constants, dialog);
-    }
-
-    /**
-     * Helper function for getAllConstantsNamesForDialog() which builds the array of constants name
-     * 
-     * @param constants
-     * @param dialog
-     */
-    private List<String> buildListOfConstants(final List<String> constants, final MSDialog dialog)
-    {
-        for (final DialogField df : dialog.getFieldsList())
-        {
-            if (!df.getName().equals("null"))
-            {
-                constants.add(df.getName());
-            }
-        }
-
-        for (final DialogPanel dp : dialog.getPanelsList())
-        {
-            final MSDialog dialogPanel = this.getDialogByName(dp.getName());
-
-            if (dialogPanel != null)
-            {
-                buildListOfConstants(constants, dialogPanel);
-            }
-        }
-
-        return constants;
-    }
-
-    /**
-     * 
-     * @return
-     */
-    public int getBlockSize()
-    {
-        return ecuImplementation.getBlockSize();
-    }
-
-    /**
-     * 
-     * @return
-     */
-    public int getCurrentTPS()
-    {
-        return ecuImplementation.getCurrentTPS();
-    }
-
-    /**
-     * 
-     * @return
-     */
-    public String getLogHeader()
-    {
-        return ecuImplementation.getLogHeader();
-    }
-
-    /**
-     * 
-     */
-    public void refreshFlags()
-    {
-        ecuImplementation.refreshFlags();
-    }
-
-    /**
-     * 
-     */
-    public void setMenuVisibilityFlags()
-    {
-        ecuImplementation.setMenuVisibilityFlags();
-    }
-
-    /**
-     * 
-     */
-    public void setUserDefinedVisibilityFlags()
-    {
-        ecuImplementation.setUserDefinedVisibilityFlags();
-
-    }
-
-    /**
-     * 
-     * @return
-     */
-    public String[] getControlFlags()
-    {
-        return ecuImplementation.getControlFlags();
-    }
-
-    /**
-     * 
-     * @return
-     */
-    public List<String> getRequiresPowerCycle()
-    {
-        return ecuImplementation.getRequiresPowerCycle();
-    }
-
-    public List<SettingGroup> getSettingGroups()
-    {
-        ecuImplementation.createSettingGroups();
-        return ecuImplementation.getSettingGroups();
-    }
-
-    public Map<String, String> getControllerCommands()
-    {
-        ecuImplementation.createControllerCommands();
-        return ecuImplementation.getControllerCommands();
-    }
-
-    /**
-     * Helper functions to get specific value out of ECU Different MS version have different name for the same thing so get the right one depending on
-     * the MS version we're connected to
-     */
-
-    /**
-     * @return Return the current ECU cylinders count
-     */
-    public int getCylindersCount()
-    {
-        return (int) (isConstantExists("nCylinders") ? getField("nCylinders") : getField("nCylinders1"));
-    }
-
-    /**
-     * @return Return the current ECU injectors count
-     */
-    public int getInjectorsCount()
-    {
-        return (int) (isConstantExists("nInjectors") ? getField("nInjectors") : getField("nInjectors1"));
-    }
-
-    /**
-     * @return Return the current ECU divider
-     */
-    public int getDivider()
-    {
-        return (int) (isConstantExists("divider") ? getField("divider") : getField("divider1"));
-    }
-
-    /**
-     * Return the current ECU injector staging
-     * 
-     * @return 0 = Simultaneous, 1 = Alternating
-     */
-    public int getInjectorStating()
-    {
-        return (int) (isConstantExists("alternate") ? getField("alternate") : getField("alternate1"));
-    }
-
-    public double getField(final String channelName)
-    {
-        return DataManager.getInstance().getField(channelName);
-    }
-
-    private void setImplementation(final String signature)
-    {
-        final Class<? extends MSECUInterface> ecuClass = ECURegistry.INSTANCE.findEcu(signature);
-
-        if ((ecuImplementation != null) && ecuImplementation.getClass().equals(ecuClass))
-        {
-            broadcast(PROBE_ECU);
-            return;
-        }
-
-        Constructor<? extends MSECUInterface> constructor;
-        try
-        {
-            constructor = ecuClass.getConstructor(MSControllerInterface.class, MSUtilsInterface.class);
-
-            ecuImplementation = constructor.newInstance(Megasquirt.this, MSUtils.INSTANCE);
-
-            if (!signature.equals(ecuImplementation.getSignature()))
-            {
-                trueSignature = ecuImplementation.getSignature();
-
-                final String msg = "Got unsupported signature from Megasquirt \"" + trueSignature + "\" but found a similar supported signature \"" + signature + "\"";
-
-                sendToastMessage(msg);
-                DebugLogManager.INSTANCE.log(msg, Log.INFO);
-            }
-            sendMessage("Found " + trueSignature);
-
-        }
-        catch (final Exception e)
-        {
-            DebugLogManager.INSTANCE.logException(e);
-            broadcast(UNKNOWN_ECU);
-        }
-        broadcast(PROBE_ECU);
-    }
-
-    @Override
-    public void registerOutputChannel(final OutputChannel o)
-    {
-        DataManager.getInstance().addOutputChannel(o);
-
-    }
-
 }

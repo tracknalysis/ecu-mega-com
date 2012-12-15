@@ -1,5 +1,5 @@
 /**
- * Copyright 2012 the original author or authors.
+ * Copyright 2011, 2012 David Smith.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this software except in compliance with the License.
@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package net.tracknalysis.ecu.ms;
+package net.tracknalysis.ecu.ms.ecu.factory;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -22,129 +22,128 @@ import java.util.List;
 
 import net.tracknalysis.common.io.IoManager;
 import net.tracknalysis.common.io.IoManagerResult;
-import net.tracknalysis.ecu.ms.log.Log;
+import net.tracknalysis.ecu.ms.InvalidSignatureException;
+import net.tracknalysis.ecu.ms.NoSignatureException;
+import net.tracknalysis.ecu.ms.SignatureException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import uk.org.smithfamily.mslogger.ecuDef.MSControllerInterface;
+import uk.org.smithfamily.mslogger.ecuDef.MSECUInterface;
+
 
 /**
+ * Abstraction of the code originally contained in the MSLogger Megasquirt class.  This refactoring
+ * splits the ECU retrieval and signature probing logic into its own set of classes to simplify the
+ * main Megasquirt communication classes and to make this logic more accessible.
+ *
  * @author David Smith
  * @author David Valeri
  */
-public abstract class MsFactory {
+public abstract class MsEcuInterfaceFactory {
     
-    private static final Logger LOG = LoggerFactory.getLogger(MsFactory.class);
+    private static final Logger LOG = LoggerFactory.getLogger(MsEcuInterfaceFactory.class);
     
-    private static MsFactory INSTANCE;
+    private static MsEcuInterfaceFactory INSTANCE;
     
     private static final byte[] BOOT_COMMAND = new byte[] {'X'};
     
     public static final List<byte[]> DEFAULT_QUERY_COMMANDS = Collections
             .unmodifiableList(Arrays.asList(new byte[] {'Q'}, new byte[] {'S'}));
     
-    public static synchronized MsFactory getInstance() {
+    public static synchronized MsEcuInterfaceFactory getInstance() {
         if (INSTANCE == null) {
-            INSTANCE = new DefaultMsFactory();
+            INSTANCE = new DefaultMsEcuInterfaceFactory();
         }
         return INSTANCE;
     }
     
     /**
-     * Constructs a new {@link Megasquirt} instance of the type appropriate
+     * Constructs a new {@link MSECUInterface} instance of the type appropriate
      * for the given signature.
      *
      * @param signature the signature of the firmware being communicated with
-     * @param msIoManager the IO manager to use for communicating with the ECU
-     * @param tableManager the table manager to use
-     * @param logManager the log manager to use
-     * @param configuration the configuration to use
+     * @param parent the parent controller instance to use
      *
-     * @throws MsFactoryException if there is an error constructing the instance
+     * @throws MsEcuInterfaceFactoryException if there is an error constructing the instance
      */
-    public abstract Megasquirt getMegasquirt(String signature,
-    		IoManager msIoManager, TableManager tableManager,
-            Log logManager, MsConfiguration configuration)
-            throws MsFactoryException;
+    public abstract MSECUInterface getMegasquirt(String signature, MSControllerInterface parent)
+            throws MsEcuInterfaceFactoryException;
     
     /**
-     * Constructs a new {@link Megasquirt} instance of the type appropriate
-     * for the ECU connected through the IO manager.
+     * Constructs a new {@link MSECUInterface} instance of the type appropriate
+     * for the Megasquirt connected through the IO manager.
      *
-     * @param msIoManager the IO manager to use for communicating with the ECU
-     * @param tableManager the table manager to use
-     * @param logManager the log manager to use
-     * @param configuration the configuration to use
+     * @param ioManager the IO manager to use for communicating with the Megasquirt
+     * @param parent the parent controller instance to use
      *
-     * @throws MsFactoryException if there is an error constructing the instance
+     * @throws MsEcuInterfaceFactoryException if there is an error constructing the instance
      * @throws SignatureException if there is an error determining the signature
-     * @throws IOException if there is a communication error determining the ECU signature
+     * @throws IOException if there is a communication error determining the Megasquirt signature
      */
-    public Megasquirt getMegasquirt(
-    		IoManager msIoManager, TableManager tableManager,
-            Log logManager, MsConfiguration configuration)
-            throws MsFactoryException, SignatureException, IOException {
+    public MSECUInterface getMegasquirt(IoManager ioManager, MSControllerInterface parent)
+            throws MsEcuInterfaceFactoryException, SignatureException, IOException {
         
-        String signature = getSignature(msIoManager);
-        return getMegasquirt(signature, msIoManager, tableManager, logManager,
-                configuration);
+        String signature = getSignature(ioManager);
+        return getMegasquirt(signature, parent);
     }
     
     /**
-     * Retrieves the signature of the ECU connected through the IO manager
-     * using query commands defined in {@link #DEFAULT_QUERY_COMMANDS}..
+     * Retrieves the signature of the Megasquirt connected through the IO manager
+     * using query commands defined in {@link #DEFAULT_QUERY_COMMANDS}.
      * Retries up to 20 times to query for the signature, absent any IO errors.
      *
-     * @param msIoManager the IO manager to use for querying the ECU
+     * @param ioManager the IO manager to use for querying the Megasquirt
      *
-     * @return the signature of the ECU
+     * @return the signature of the ECMegasquirtU
      *
      * @throws SignatureException if there is an error determining the signature
-     * @throws IOException if there is a communication error determining the ECU signature
+     * @throws IOException if there is a communication error determining the Megasquirt signature
      */
-    public String getSignature(IoManager msIoManager)
+    public String getSignature(IoManager ioManager)
             throws SignatureException, IOException {
-        return getSignature(msIoManager, 20);
+        return getSignature(ioManager, 20);
     }
     
     /**
-     * Retrieves the signature of the ECU connected through the IO manager
+     * Retrieves the signature of the Megasquirt connected through the IO manager
      * using query commands defined in {@link #DEFAULT_QUERY_COMMANDS}.
      * Retries up to ${code retryCount} times to query for the signature, 
      * absent any IO errors.
      *
-     * @param msIoManager the IO manager to use for querying the ECU
+     * @param ioManager the IO manager to use for querying the Megasquirt
      * @param retryCount the number of times to retry
      *
-     * @return the signature of the ECU
+     * @return the signature of the Megasquirt
      *
      * @throws SignatureException if there is an error determining the signature
-     * @throws IOException if there is a communication error determining the ECU signature
+     * @throws IOException if there is a communication error determining the Megasquirt signature
      */
-    public String getSignature(IoManager msIoManager,
+    public String getSignature(IoManager ioManager,
             int retryCount) throws SignatureException, IOException {
-        return getSignature(msIoManager, retryCount, DEFAULT_QUERY_COMMANDS);
+        return getSignature(ioManager, retryCount, DEFAULT_QUERY_COMMANDS);
         
     }
     
     /**
-     * Retrieves the signature of the ECU connected through the IO manager
+     * Retrieves the signature of the Megasquirt connected through the IO manager
      * using query commands defined in {@code queryCommands}.
      * Retries up to ${code retryCount} times to query for the signature, 
      * absent any IO errors.
      *
-     * @param msIoManager the IO manager to use for querying the ECU
+     * @param ioManager the IO manager to use for querying the Megasquirt
      * @param retryCount the number of times to retry
      * @param queryCommands
      *            optional ordered list of commands to use for querying. If
      *            {@code null}, {@link #DEFAULT_QUERY_COMMANDS} is used. 
      *
-     * @return the signature of the ECU
+     * @return the signature of the Megasquirt
      *
      * @throws SignatureException if there is an error determining the signature
-     * @throws IOException if there is a communication error determining the ECU signature
+     * @throws IOException if there is a communication error determining the Megasquirt signature
      */
-    public String getSignature(IoManager msIoManager, int retryCount,
+    public String getSignature(IoManager ioManager, int retryCount,
             List<byte[]> queryCommands) throws SignatureException, IOException {
         int tryCounter = 0;
         Exception error = null;
@@ -153,10 +152,10 @@ public abstract class MsFactory {
         while ((fingerprint == null && retryCount == -1)
                 || (fingerprint == null && tryCounter < retryCount)) {
             try {
-                fingerprint = queryForFingerprint(msIoManager, queryCommands);
+                fingerprint = queryForSignature(ioManager, queryCommands);
             } catch (BootException e) {
                 LOG.info("ECU needs to boot.  Sending boot command.");
-                msIoManager.write(BOOT_COMMAND);
+                ioManager.write(BOOT_COMMAND);
                 delay(500);
                 error = e;
             } catch (SignatureException e) {
@@ -176,19 +175,20 @@ public abstract class MsFactory {
     }
     
     /**
-     * Interrogate the controller for a signature of known formatting.
+     * Interrogate the Megasquirt for a signature of known formatting.
      * 
-     * @param msIoManager the IO manager to use to query the ECU
+     * @param msIoManager the IO manager to use to query the Megasquirt
      * @param queryCommands
      *            optional ordered list of commands to use for querying. If
      *            {@code null}, {@link #DEFAULT_QUERY_COMMANDS} is used.
      * 
      * @return the signature value
      * 
-     * @throws BootException if the ECU needs to boot
+     * @throws BootException if the Megasquirt needs to boot
      * @throws InvalidSignatureException if the signature is not a known format or is not returned
+     * @throws NoSignatureException if we could not get a response from the Megasquirt
      */
-    protected String queryForFingerprint(IoManager msIoManager, 
+    protected String queryForSignature(IoManager msIoManager, 
             List<byte[]> queryCommands) 
             throws IOException, BootException, SignatureException {
         
@@ -211,11 +211,11 @@ public abstract class MsFactory {
     /**
      * Processes a supposed signature for known formatting.
      *
-     * @param response the bytes returned from the ECU
+     * @param response the bytes returned from the Megasquirt
      *
      * @return the signature value
      *
-     * @throws BootException if the ECU needs a reboot
+     * @throws BootException if the Megasquirt needs a reboot
      * @throws InvalidSignatureException if the signature is not a known format
      */
     protected String processSignature(byte[] response) throws BootException,

@@ -44,64 +44,64 @@ public interface MSECUInterface
     Map<String,String> controllerCommands = new HashMap<String,String>();
 
     void setFlags();
-    public abstract String getSignature();
+    String getSignature();
 
-    public abstract byte[] getOchCommand();
+    byte[] getOchCommand();
 
-    public abstract byte[] getSigCommand();
+    byte[] getSigCommand();
 
-    public abstract void loadConstants(boolean simulated) throws IOException;
+    void loadConstants() throws IOException;
 
-    public abstract void calculate(byte[] ochBuffer);
+    void calculate(byte[] ochBuffer);
 
-    public abstract String getLogHeader();
+    String getLogHeader();
 
-    public abstract String getLogRow();
+    String getLogRow();
 
-    public abstract int getBlockSize();
+    int getBlockSize();
 
-    public abstract int getSigSize();
+    int getSigSize();
 
-    public abstract int getPageActivationDelay();
+    int getPageActivationDelay();
     
-    public abstract List<String> getPageIdentifiers();
+    List<String> getPageIdentifiers();
     
-    public abstract List<byte[]> getPageActivates();
+    List<byte[]> getPageActivates();
     
-    public abstract List<String> getPageValueWrites();
+    List<String> getPageValueWrites();
     
-    public abstract List<String> getPageChunkWrites();
+    List<String> getPageChunkWrites();
 
-    public abstract int getInterWriteDelay();
+    int getInterWriteDelay();
 
-    public abstract int getCurrentTPS();
+    int getCurrentTPS();
 
-    public abstract void refreshFlags();
+    void refreshFlags();
 
-    public abstract boolean isCRC32Protocol();
+    boolean isCRC32Protocol();
 
-    public abstract void createTableEditors();
+    void createTableEditors();
     
-    public abstract void createCurveEditors();
+    void createCurveEditors();
     
-    public abstract void createMenus();
+    void createMenus();
     
-    public abstract void createDialogs();
+    void createDialogs();
     
-    public abstract void setUserDefinedVisibilityFlags();
+    void setUserDefinedVisibilityFlags();
     
-    public abstract void setMenuVisibilityFlags();
+    void setMenuVisibilityFlags();
     
-    public abstract String[] getControlFlags();
+    String[] getControlFlags();
 
-    public abstract void createSettingGroups();
+    void createSettingGroups();
     
-    public abstract List<SettingGroup> getSettingGroups();
+    List<SettingGroup> getSettingGroups();
     
-    public abstract List<String> getRequiresPowerCycle();
+    List<String> getRequiresPowerCycle();
     
-    public abstract void createControllerCommands();
+    void createControllerCommands();
     
-    public abstract Map<String, String> getControllerCommands();
+    Map<String, String> getControllerCommands();
     
 }
