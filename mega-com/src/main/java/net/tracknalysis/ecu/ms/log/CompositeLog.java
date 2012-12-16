@@ -1,5 +1,5 @@
 /**
- * Copyright 2011 the original author or authors.
+ * Copyright 2012 David Valeri.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this software except in compliance with the License.
@@ -19,6 +19,8 @@ import java.util.List;
 
 
 /**
+ * An interface for a {@link Log} that writes to multiple other {@link Log}s.
+ *
  * @author David Valeri
  */
 public interface CompositeLog extends Log {

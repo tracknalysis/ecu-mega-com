@@ -20,14 +20,14 @@ Authors: David Valeri
   <modelVersion>4.0.0</modelVersion>
 
   <parent>
-    <groupId>net.tracknalysis.ecu</groupId> 
+    <groupId>net.tracknalysis.ecu.ms</groupId> 
     <artifactId>tracknalysis-mega-com-parent</artifactId>
     <version>0.1.0-SNAPSHOT</version>
   </parent>
 
   <artifactId>tracknalysis-mega-com-common</artifactId>
   
-  <name>Tracknalysis :: ECU :: MegaCom :: Common</name>
+  <name>Tracknalysis :: ECU :: Mega Com :: Common</name>
   <description>Common files.</description>
   <inceptionYear>2012</inceptionYear>
   

@@ -25,7 +25,7 @@ Authors: David Valeri
     <version>1-SNAPSHOT</version>
   </parent>
 
-  <groupId>net.tracknalysis.ecu</groupId> 
+  <groupId>net.tracknalysis.ecu.ms</groupId> 
   <artifactId>tracknalysis-mega-com-parent</artifactId>
   <version>0.1.0-SNAPSHOT</version>
   <packaging>pom</packaging>
@@ -99,7 +99,7 @@ Authors: David Valeri
   <modules>
     <module>mega-com</module>
     <module>mega-com-common</module>
-    <module>mega-com-gen</module>
+    <module>mega-com-normaliser</module>
   </modules>
   
   <build>

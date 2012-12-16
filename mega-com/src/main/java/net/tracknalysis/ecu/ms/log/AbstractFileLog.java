@@ -1,5 +1,5 @@
 /**
- * Copyright 2011 the original author or authors.
+ * Copyright 2011, 2012 David Smith.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this software except in compliance with the License.
@@ -31,6 +31,9 @@ import org.slf4j.LoggerFactory;
 import net.tracknalysis.ecu.ms.Megasquirt;
 
 /**
+ * Adaptation of the original log writing code in MSLogger for handling generic file based log
+ * logic.
+ *
  * @author David Smith
  * @author David Valeri
  */

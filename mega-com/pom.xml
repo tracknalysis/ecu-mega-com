@@ -20,14 +20,14 @@ Authors: David Valeri
   <modelVersion>4.0.0</modelVersion>
 
   <parent>
-    <groupId>net.tracknalysis.ecu</groupId> 
+    <groupId>net.tracknalysis.ecu.ms</groupId> 
     <artifactId>tracknalysis-mega-com-parent</artifactId>
     <version>0.1.0-SNAPSHOT</version>
   </parent>
 
   <artifactId>tracknalysis-mega-com</artifactId>  
   
-  <name>Tracknalysis :: Megasquirt :: MegaCom</name>
+  <name>Tracknalysis :: Megasquirt :: Mega Com</name>
   <description>A communication tier for interacting with Megasquirt ECUs</description>
   <inceptionYear>2012</inceptionYear>
     
@@ -49,13 +49,13 @@ Authors: David Valeri
       <artifactId>tracknalysis-common</artifactId>
     </dependency>
     <dependency>
-      <groupId>net.tracknalysis.ecu</groupId>
+      <groupId>net.tracknalysis.ecu.ms</groupId>
       <artifactId>tracknalysis-mega-com-common</artifactId>
       <version>${project.version}</version>
     </dependency>
     <dependency>
-      <groupId>net.tracknalysis.ecu</groupId>
-      <artifactId>tracknalysis-mega-com-gen</artifactId>
+      <groupId>net.tracknalysis.ecu.ms</groupId>
+      <artifactId>tracknalysis-mega-com-normaliser</artifactId>
       <version>${project.version}</version>
     </dependency>
     <dependency>
@@ -83,7 +83,7 @@ Authors: David Valeri
               <arguments> 
                 <argument>-classpath</argument>
                 <classpath/>
-                <argument>uk.org.smithfamily.utils.normaliser.Normaliser</argument>
+                <argument>net.tracknalysis.ecu.ms.normaliser.Normaliser</argument>
                 <argument>${basedir}/src/main/inis/generationList.txt</argument>
                 <argument>${project.build.directory}/generated-sources/mega-com</argument>
               </arguments>              
@@ -130,7 +130,20 @@ Authors: David Valeri
                     </goals>
                   </pluginExecutionFilter>
                   <action>
-                    <execute/>
+                    <ignore/>
+                  </action>
+                </pluginExecution>
+                <pluginExecution>
+                  <pluginExecutionFilter>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>build-helper-maven-plugin</artifactId>
+                    <versionRange>[1.7,)</versionRange>
+                    <goals>
+                      <goal>add-source</goal>
+                    </goals>
+                  </pluginExecutionFilter>
+                  <action>
+                    <ignore/>
                   </action>
                 </pluginExecution>
               </pluginExecutions>

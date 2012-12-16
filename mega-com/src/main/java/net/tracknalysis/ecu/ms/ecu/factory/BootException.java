@@ -16,6 +16,8 @@
 package net.tracknalysis.ecu.ms.ecu.factory;
 
 /**
+ * Exception indicating that the Megasquirt is presenting a boot prompt.
+ *
  * @author David Smith
  */
 @SuppressWarnings("serial") 

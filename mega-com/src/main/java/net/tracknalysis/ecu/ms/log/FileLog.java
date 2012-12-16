@@ -1,5 +1,5 @@
 /**
- * Copyright 2011 the original author or authors.
+ * Copyright 2012 David Valeri.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this software except in compliance with the License.
@@ -16,7 +16,8 @@
 package net.tracknalysis.ecu.ms.log;
 
 /**
- * @author David Smith
+ * Interface for {@link Log}s that write to a file.
+ *
  * @author David Valeri
  */
 public interface FileLog extends Log {

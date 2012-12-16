@@ -1,5 +1,5 @@
 /**
- * Copyright 2012 the original author or authors.
+ * Copyright 2012 David Valeri.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this software except in compliance with the License.
@@ -16,6 +16,8 @@
 package net.tracknalysis.ecu.ms.ecu.factory;
 
 /**
+ * Exception indicating that no signature was received from the Megasquirt.
+ *
  * @author David Valeri
  */
 public class NoSignatureException extends SignatureException {

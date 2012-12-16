@@ -1,5 +1,5 @@
 /**
- * Copyright 2011 the original author or authors.
+ * Copyright 2012 David Valeri.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this software except in compliance with the License.
@@ -28,6 +28,8 @@ import org.slf4j.LoggerFactory;
 
 
 /**
+ * Default implementation of a composite log.
+ *
  * @author David Valeri
  */
 public class DefaultCompositeLog implements CompositeLog {
@@ -52,7 +54,7 @@ public class DefaultCompositeLog implements CompositeLog {
      * throws an unchecked exception, this method will throw the exception immediately.
      */
     @Override
-    public void start() throws IOException {
+    public synchronized void start() throws IOException {
         startTime = System.currentTimeMillis();
         IOException exception = null;
         
@@ -84,7 +86,7 @@ public class DefaultCompositeLog implements CompositeLog {
      * throws an unchecked exception, this method will throw the exception immediately.
      */
     @Override
-    public void stop() throws IOException {
+    public synchronized void stop() throws IOException {
         IOException exception = null;
         
         for (Log log : logs) {
@@ -113,7 +115,7 @@ public class DefaultCompositeLog implements CompositeLog {
      * is currently logging.
      */
     @Override
-    public boolean isLogging() {
+    public synchronized boolean isLogging() {
         boolean logging = false;
         for (Log log : logs) {
             if (log.isLogging()) {
@@ -130,7 +132,7 @@ public class DefaultCompositeLog implements CompositeLog {
     }
 
     @Override
-    public void write(Megasquirt ms) {
+    public synchronized void write(Megasquirt ms) {
         for (Log log : logs) {
             try {
                 log.write(ms);
@@ -142,7 +144,7 @@ public class DefaultCompositeLog implements CompositeLog {
     }
 
     @Override
-    public void mark() {
+    public synchronized void mark() {
         for (Log log : logs) {
             try {
                 log.mark();
@@ -154,7 +156,7 @@ public class DefaultCompositeLog implements CompositeLog {
     }
 
     @Override
-    public void mark(String message) {
+    public synchronized void mark(String message) {
         for (Log log : logs) {
             try {
                 log.mark(message);
