@@ -829,8 +829,12 @@ public class Megasquirt implements MsController,
 							ecuImplementation.calculate(result.getResult());
 							log.write(Megasquirt.this);
 							// Put us back in the queue to execute again since we are still logging.
-							if (!ioCommandManager.enqueue(this)) {
-								LOG.error("Megasquirt {}: Error enquing log runtime vars command.  Stopping logging.");
+							try {
+								if (!ioCommandManager.enqueue(this)) {
+									LOG.error("Megasquirt {}: Error enquing log runtime vars command.  Stopping logging.");
+									logging = false;
+								}
+							} catch (IllegalStateException e) {
 								logging = false;
 							}
 						} catch (Exception e) {
@@ -842,7 +846,11 @@ public class Megasquirt implements MsController,
 							} else {
 								LOG.warn("Megasquirt " + instanceNumber + ": Error logging runtime vars.", e);
 								// Put us back in the queue to execute again since we are still logging.
-								ioCommandManager.enqueue(this);
+								try {
+									ioCommandManager.enqueue(this);
+								} catch (IllegalStateException e2) {
+									logging = false;
+								}
 							}
 						}
 		        	} 
